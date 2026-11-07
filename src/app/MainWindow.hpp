@@ -125,6 +125,12 @@ private:
     void updateScale();
     Geometry geometry() const;
     std::vector<ui::Rect> menuTitleRects() const;
+    /// The window's own minimise, maximise and close boxes at the menu bar's right end (the system
+    /// title bar is replaced by the menu bar). Empty in test mode.
+    std::vector<ui::Rect> windowButtonRects() const;
+    void drawWindowButtons(int textTop);
+    void pressWindowButton(int index);
+    static SDL_HitTestResult hitTest(SDL_Window* window, const SDL_Point* area, void* data);
     void layout();
     void draw();
     void drawMenuBar(const Geometry& g);
@@ -367,6 +373,7 @@ private:
     uint64_t scrollTimer_ = 0;
     int mouseX_ = 0;
     int mouseY_ = 0;
+    int hoveredWindowButton_ = -1;
 
     // Status.
     std::string message_;

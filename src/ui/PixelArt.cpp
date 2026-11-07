@@ -77,6 +77,10 @@ void drawIcon(Canvas& canvas, Icon icon, int x, int y, int pixel, Color color, b
     fillArt(canvas, art, x, y, pixel, color);
 }
 
+void drawIconPlain(Canvas& canvas, Icon icon, int x, int y, int pixel, Color color) {
+    fillArt(canvas, artFor(icon), x, y, pixel, color);
+}
+
 void drawRetroBox(Canvas& canvas, const Rect& body, Color fill, Color line, int pixel, int shadow) {
     canvas.fill(body.offset(shadow, shadow), kBlackColor);
     canvas.fill(body, fill);
@@ -142,12 +146,18 @@ std::vector<std::string> wrapText(std::string_view text, size_t columns) {
     return pieces;
 }
 
-int drawWithHotkey(Canvas& canvas, Font& font, int x, int y, std::string_view title, int hotkey, Color color, Color hotkeyColor) {
+int drawWithHotkey(Canvas& canvas, Font& font, int x, int y, std::string_view title, int hotkey, Color color, Color hotkeyColor,
+                   bool shadow) {
     int start = x;
     int index = 0;
     for (size_t offset = 0; offset < title.size(); ++index) {
         char32_t character = decodeUtf8(title, offset);
-        drawGlyph(canvas, font, character, x, y, index == hotkey ? hotkeyColor : color, false);
+        Color ink = index == hotkey ? hotkeyColor : color;
+        if (shadow) {
+            drawGlyph(canvas, font, character, x, y, ink, true);
+        } else {
+            drawGlyphPlain(canvas, font, character, x, y, ink);
+        }
         x += Font::cells(character) * font.cellWidth();
     }
     return x - start;

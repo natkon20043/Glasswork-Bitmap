@@ -80,5 +80,7 @@ int drawText(Canvas& canvas, Font& font, int x, int y, std::string_view text, Co
 void drawGlyph(Canvas& canvas, Font& font, char32_t character, int x, int y, Color color, bool shadow);
 /// Without the shadow: only for a character inside a block cursor, drawn in the background's color.
 void drawGlyphPlain(Canvas& canvas, Font& font, char32_t character, int x, int y, Color color);
+/// A line of text without the shadow: dark text on the grey menu bar, status line and side-window tabs.
+int drawTextPlain(Canvas& canvas, Font& font, int x, int y, std::string_view text, Color color);
 
 }  // namespace gw::ui

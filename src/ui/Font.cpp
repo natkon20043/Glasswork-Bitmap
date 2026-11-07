@@ -110,6 +110,16 @@ void drawGlyphPlain(Canvas& canvas, Font& font, char32_t character, int x, int y
     }
 }
 
+int drawTextPlain(Canvas& canvas, Font& font, int x, int y, std::string_view text, Color color) {
+    int start = x;
+    for (size_t index = 0; index < text.size();) {
+        char32_t character = decodeUtf8(text, index);
+        drawGlyphPlain(canvas, font, character, x, y, color);
+        x += Font::cells(character) * font.cellWidth();
+    }
+    return x - start;
+}
+
 int drawText(Canvas& canvas, Font& font, int x, int y, std::string_view text, Color color, bool shadow) {
     int start = x;
     for (size_t index = 0; index < text.size();) {

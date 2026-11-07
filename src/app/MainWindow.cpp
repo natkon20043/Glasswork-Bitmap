@@ -464,8 +464,11 @@ void MainWindow::createWindow() {
             height = std::max(240, std::atoi(size.c_str() + size.find('x') + 1));
         }
     }
-    window_ = SDL_CreateWindow("Glasswork Bitmap", width, height,
-                               SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY | SDL_WINDOW_HIDDEN);
+    SDL_WindowFlags flags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY | SDL_WINDOW_HIDDEN;
+    if (!scripted_) {
+        flags |= SDL_WINDOW_BORDERLESS;  // the menu bar is the title bar, with pixel window boxes
+    }
+    window_ = SDL_CreateWindow("Glasswork Bitmap", width, height, flags);
     if (count > 0) {
         int x = 0, y = 0;
         SDL_GetWindowPosition(app_.windows().back()->sdlWindow(), &x, &y);
@@ -473,6 +476,7 @@ void MainWindow::createWindow() {
     }
     SDL_SetWindowMinimumSize(window_, 480, 320);
     useDarkTitleBar(window_);
+    SDL_SetWindowHitTest(window_, &MainWindow::hitTest, this);
     renderer_ = SDL_CreateRenderer(window_, nullptr);
     if (renderer_) {
         SDL_SetRenderVSync(renderer_, 1);
@@ -635,7 +639,11 @@ void MainWindow::drawFrame(const ui::Rect& rect, Color color, bool twoLines) {
 int MainWindow::drawOnEdge(const std::string& text, int x, int top, Color color, Color background, bool shadow) {
     int width = ui::textWidth(Chrome(), text);
     canvas_.fill({x, top, width, Line()}, background);
-    ui::drawText(canvas_, Chrome(), x, top, text, color, shadow);
+    if (shadow) {
+        ui::drawText(canvas_, Chrome(), x, top, text, color, true);
+    } else {
+        ui::drawTextPlain(canvas_, Chrome(), x, top, text, color);
+    }
     return width;
 }
 
@@ -702,21 +710,131 @@ void MainWindow::drawMenuBar(const Geometry& g) {
         }
         if (index == 0) {
             ui::Rect size = ui::iconSize(ui::Icon::Menu, Pixel());
-            ui::drawIcon(canvas_, ui::Icon::Menu, rect.x + Snap((rect.w - size.w) / 2.0), textTop + Snap((Line() - size.h) / 2.0), Pixel(),
-                         colors.barHotkey, false);
+            ui::drawIconPlain(canvas_, ui::Icon::Menu, rect.x + Snap((rect.w - size.w) / 2.0), textTop + Snap((Line() - size.h) / 2.0),
+                              Pixel(), colors.barHotkey);
             continue;
         }
         int hotkey = -1;
         std::string title = ui::withoutHotkeyMark(marked[index], &hotkey);
         ui::drawWithHotkey(canvas_, Chrome(), rect.x + Cell(), textTop, title, hotkey, open ? colors.barHighlightText : colors.barText,
-                           colors.barHotkey);
+                           colors.barHotkey, false);
     }
-    std::string title = folder_.empty() ? std::string() : utf8FromPath(pathFromUtf8(folder_).filename());
-    if (!title.empty()) {
-        int width = ui::textWidth(Chrome(), title);
-        int x = std::max(titles.back().right() + 2 * Cell(), Snap(g.menuBar.right() - 2 * Cell() - width));
-        ui::drawText(canvas_, Chrome(), x, textTop, title, colors.barDim, false);
+    std::vector<ui::Rect> buttons = windowButtonRects();
+    int right = buttons.empty() ? g.menuBar.right() : buttons.front().x;
+    std::string title = folder_.empty() ? std::string("Glasswork Bitmap") : utf8FromPath(pathFromUtf8(folder_).filename());
+    int width = ui::textWidth(Chrome(), title);
+    int x = Snap(right - 2 * Cell() - width);
+    if (x > titles.back().right() + 2 * Cell()) {
+        ui::drawTextPlain(canvas_, Chrome(), x, textTop, title, colors.barDim);
     }
+    drawWindowButtons(textTop);
+}
+
+std::vector<ui::Rect> MainWindow::windowButtonRects() const {
+    if (scripted_ && environmentValue("GLASSWORK_SCRIPT_BUTTONS").empty()) {
+        return {};
+    }
+    int height = std::max(14 * Pixel(), Line());
+    int width = 4 * Cell();
+    int right = canvas_.width();
+    return {{right - 3 * width, 0, width, height}, {right - 2 * width, 0, width, height}, {right - width, 0, width, height}};
+}
+
+void MainWindow::drawWindowButtons(int textTop) {
+    const bitmap::Scheme& colors = Colors();
+    std::vector<ui::Rect> buttons = windowButtonRects();
+    int pixel = Pixel();
+    bool maximized = (SDL_GetWindowFlags(window_) & SDL_WINDOW_MAXIMIZED) != 0;
+    for (size_t index = 0; index < buttons.size(); ++index) {
+        const ui::Rect& box = buttons[index];
+        bool hovered = static_cast<int>(index) == hoveredWindowButton_;
+        Color ink = colors.barText;
+        Color fill = colors.bar;
+        if (hovered) {
+            fill = index == 2 ? bitmap::kRed : colors.barHighlight;
+            canvas_.fill({box.x, textTop, box.w, Line()}, fill);
+            ink = index == 2 ? bitmap::kWhite : colors.barHighlightText;
+        }
+        // Brackets around a little picture in chrome pixels, like the code window's close box.
+        int bracket = ui::textWidth(Chrome(), "[");
+        ui::drawTextPlain(canvas_, Chrome(), box.x + Cell() / 2, textTop, "[", ink);
+        ui::drawTextPlain(canvas_, Chrome(), box.right() - Cell() / 2 - bracket, textTop, "]", ink);
+        int size = 5 * pixel;
+        int left = box.x + (box.w - size) / 2 / pixel * pixel;
+        int top = textTop + (Line() - size) / 2 / pixel * pixel;
+        Color mark = hovered ? ink : (index == 2 ? colors.barHotkey : colors.barText);
+        if (index == 0) {
+            canvas_.fill({left, top + size - pixel, size, pixel}, mark);  // an underscore
+        } else if (index == 1 && !maximized) {
+            canvas_.frame({left, top, size, size}, mark, pixel);  // a window with its title strip
+            canvas_.fill({left, top, size, 2 * pixel}, mark);
+        } else if (index == 1) {
+            // Two windows: back to the earlier size.
+            canvas_.frame({left + pixel, top - pixel, size - pixel, size - pixel}, mark, pixel);
+            canvas_.fill({left - pixel, top + pixel, size - pixel, size - pixel}, fill);
+            canvas_.frame({left - pixel, top + pixel, size - pixel, size - pixel}, mark, pixel);
+        } else {
+            for (int step = 0; step < 5; ++step) {  // an X
+                canvas_.fill({left + step * pixel, top + step * pixel, pixel, pixel}, mark);
+                canvas_.fill({left + (4 - step) * pixel, top + step * pixel, pixel, pixel}, mark);
+            }
+        }
+    }
+}
+
+void MainWindow::pressWindowButton(int index) {
+    if (index == 0) {
+        SDL_MinimizeWindow(window_);
+    } else if (index == 1) {
+        if (SDL_GetWindowFlags(window_) & SDL_WINDOW_MAXIMIZED) {
+            SDL_RestoreWindow(window_);
+        } else {
+            SDL_MaximizeWindow(window_);
+        }
+    } else if (index == 2) {
+        requestClose([this](bool ok) {
+            if (ok) {
+                app_.closeWindow(this);
+            }
+        });
+    }
+    hoveredWindowButton_ = -1;
+    dirty_ = true;
+}
+
+SDL_HitTestResult MainWindow::hitTest(SDL_Window* window, const SDL_Point* area, void* data) {
+    auto* self = static_cast<MainWindow*>(data);
+    int x = static_cast<int>(area->x * self->pixelDensity_), y = static_cast<int>(area->y * self->pixelDensity_);
+    int width = self->canvas_.width(), height = self->canvas_.height();
+    bool maximized = (SDL_GetWindowFlags(window) & (SDL_WINDOW_MAXIMIZED | SDL_WINDOW_FULLSCREEN)) != 0;
+    if (!maximized) {
+        // The edges resize the window, as a frame would.
+        int edge = static_cast<int>(6 * std::max(1.0f, SDL_GetWindowDisplayScale(window)));
+        bool left = x < edge, right = x >= width - edge, top = y < edge, bottom = y >= height - edge;
+        if (top && left) return SDL_HITTEST_RESIZE_TOPLEFT;
+        if (top && right) return SDL_HITTEST_RESIZE_TOPRIGHT;
+        if (bottom && left) return SDL_HITTEST_RESIZE_BOTTOMLEFT;
+        if (bottom && right) return SDL_HITTEST_RESIZE_BOTTOMRIGHT;
+        if (top) return SDL_HITTEST_RESIZE_TOP;
+        if (bottom) return SDL_HITTEST_RESIZE_BOTTOM;
+        if (left) return SDL_HITTEST_RESIZE_LEFT;
+        if (right) return SDL_HITTEST_RESIZE_RIGHT;
+    }
+    int barHeight = std::max(14 * Pixel(), Line());
+    if (y >= barHeight || !self->overlays_.empty()) {
+        return SDL_HITTEST_NORMAL;
+    }
+    for (const ui::Rect& rect : self->menuTitleRects()) {
+        if (rect.contains(x, y)) {
+            return SDL_HITTEST_NORMAL;
+        }
+    }
+    for (const ui::Rect& rect : self->windowButtonRects()) {
+        if (rect.contains(x, y)) {
+            return SDL_HITTEST_NORMAL;
+        }
+    }
+    return SDL_HITTEST_DRAGGABLE;  // the rest of the menu bar moves the window; a double click maximises it
 }
 
 void MainWindow::drawEditorWindow(const Geometry& g) {
@@ -857,7 +975,7 @@ void MainWindow::drawPanelWindow(const Geometry& g) {
         std::string label = std::string(" ") + kPanelNames[index] + " ";
         bool selected = index == static_cast<int>(panel_);
         int width = selected ? drawOnEdge(label, x, window.y, colors.selectionText, colors.selection, false)
-                             : drawOnEdge(label, x, window.y, colors.text, colors.window, true);
+                             : drawOnEdge(label, x, window.y, colors.text, colors.window, false);
         panelTabRects_[static_cast<size_t>(index)] = {x, window.y, width, Line()};
         x += width;
     }
@@ -883,19 +1001,19 @@ void MainWindow::drawStatusLine(const Geometry& g) {
                               ? std::string(hint.fallbackKey)
                               : compactShortcutText(Services::shared().keybindings().shortcutFor(hint.command, keyContext()));
         int start = x;
-        x += ui::drawText(canvas_, Chrome(), x, g.status.y, key, colors.barHotkey, false);
-        x += ui::drawText(canvas_, Chrome(), x, g.status.y, std::string(" ") + hint.label, colors.barText, false);
+        x += ui::drawTextPlain(canvas_, Chrome(), x, g.status.y, key, colors.barHotkey);
+        x += ui::drawTextPlain(canvas_, Chrome(), x, g.status.y, std::string(" ") + hint.label, colors.barText);
         hintRects_.push_back({start - Cell() / 2, g.status.y, x - start + Cell(), Line()});
         hintCommands_.push_back(hint.command);
         x += 2 * Cell();
     }
-    canvas_.fillShadowed({x - Cell(), g.status.y + 2 * Pixel(), Pixel(), Line() - 4 * Pixel()}, colors.barText, Pixel());
+    canvas_.fill({x - Cell(), g.status.y + 2 * Pixel(), Pixel(), Line() - 4 * Pixel()}, colors.barText);
     std::string message = !temporaryMessage_.empty() ? temporaryMessage_ : message_;
     if (!message.empty()) {
         int width = ui::textWidth(Chrome(), message);
         int left = std::max(x, Snap(g.status.right() - Cell() - width));
         canvas_.pushClip({x, g.status.y, std::max(0, g.status.right() - Cell() - x), Line()});
-        ui::drawText(canvas_, Chrome(), left, g.status.y, message, colors.barText, false);
+        ui::drawTextPlain(canvas_, Chrome(), left, g.status.y, message, colors.barText);
         canvas_.popClip();
     }
 }
@@ -1154,6 +1272,7 @@ void MainWindow::handleEvent(const SDL_Event& event) {
         case SDL_EVENT_WINDOW_EXPOSED:
         case SDL_EVENT_WINDOW_SHOWN:
         case SDL_EVENT_WINDOW_RESTORED:
+        case SDL_EVENT_WINDOW_MAXIMIZED:
             dirty_ = true;
             break;
         case SDL_EVENT_WINDOW_FOCUS_GAINED:
@@ -1177,6 +1296,8 @@ void MainWindow::handleEvent(const SDL_Event& event) {
             break;
         case SDL_EVENT_WINDOW_MOUSE_LEAVE:
             editor_.mouseExited();
+            hoveredWindowButton_ = -1;
+            dirty_ = true;
             break;
         case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
             requestClose([this](bool ok) {
@@ -1400,6 +1521,13 @@ void MainWindow::mouseButton(const SDL_MouseButtonEvent& event, bool down) {
 bool MainWindow::chromeMouseDown(const MouseEvent& mouse) {
     Geometry g = geometry();
     if (g.menuBar.contains(mouse.x, mouse.y)) {
+        std::vector<ui::Rect> buttons = windowButtonRects();
+        for (size_t index = 0; index < buttons.size(); ++index) {
+            if (buttons[index].contains(mouse.x, mouse.y)) {
+                pressWindowButton(static_cast<int>(index));
+                return true;
+            }
+        }
         std::vector<ui::Rect> titles = menuTitleRects();
         for (size_t index = 0; index < titles.size(); ++index) {
             if (titles[index].contains(mouse.x, mouse.y)) {
@@ -1566,6 +1694,17 @@ void MainWindow::mouseMotion(const SDL_MouseMotionEvent& event) {
             return;
         default:
             break;
+    }
+    int hovered = -1;
+    std::vector<ui::Rect> buttons = windowButtonRects();
+    for (size_t index = 0; index < buttons.size(); ++index) {
+        if (buttons[index].contains(mouse.x, mouse.y)) {
+            hovered = static_cast<int>(index);
+        }
+    }
+    if (hovered != hoveredWindowButton_) {
+        hoveredWindowButton_ = hovered;
+        dirty_ = true;
     }
     if (Overlay* overlay = topOverlay()) {
         overlay->mouseMoved(mouse);

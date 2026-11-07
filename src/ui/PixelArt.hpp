@@ -23,7 +23,10 @@ void drawRetroBox(Canvas& canvas, const Rect& body, Color fill, Color line, int 
 std::vector<std::string> wrapText(std::string_view text, size_t columns);
 
 /// "File > Open" style text with one letter (the hotkey, or -1 for none) in another color.
-int drawWithHotkey(Canvas& canvas, Font& font, int x, int y, std::string_view title, int hotkey, Color color, Color hotkeyColor);
+int drawWithHotkey(Canvas& canvas, Font& font, int x, int y, std::string_view title, int hotkey, Color color, Color hotkeyColor,
+                   bool shadow = true);
+/// An icon without its shadow (on the grey menu bar).
+void drawIconPlain(Canvas& canvas, Icon icon, int x, int y, int pixel, Color color);
 
 /// Splits "&File" into "File" and the hotkey's index (in characters), -1 if there is none.
 std::string withoutHotkeyMark(std::string_view marked, int* hotkey);

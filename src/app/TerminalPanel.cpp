@@ -432,7 +432,11 @@ void TerminalPanel::draw(ui::Canvas& canvas, bool focused) {
         if (selected) {
             canvas.fill({x, strip.y, width, strip.h}, colors.selection);
         }
-        ui::drawText(canvas, Chrome(), x, strip.y, label, selected ? colors.selectionText : colors.text, !selected);
+        if (selected) {
+            ui::drawTextPlain(canvas, Chrome(), x, strip.y, label, colors.selectionText);
+        } else {
+            ui::drawText(canvas, Chrome(), x, strip.y, label, colors.text, true);
+        }
         stripButtons_.push_back({{x, strip.y, width, strip.h}, static_cast<int>(index)});
         x += width + cell / 2;
     }
