@@ -252,7 +252,7 @@ void FindBar::draw(ui::Canvas& canvas, bool focused) {
         if (on) {
             canvas.fill(rect, colors.barHighlight);
         }
-        ui::drawText(canvas, Chrome(), right, y, label, on ? colors.barHighlightText : colors.barText, false);
+        ui::drawTextPlain(canvas, Chrome(), right, y, label, on ? colors.barHighlightText : colors.barText);
         buttons_.push_back({rect, action});
         right -= cell / 2;
     };
@@ -267,12 +267,12 @@ void FindBar::draw(ui::Canvas& canvas, bool focused) {
     int countWidth = ui::textWidth(Chrome(), count_);
     right -= cell / 2;
     if (!count_.empty()) {
-        ui::drawText(canvas, Chrome(), right - countWidth, top, count_, countIsProblem_ ? colors.barHotkey : colors.barText, false);
+        ui::drawTextPlain(canvas, Chrome(), right - countWidth, top, count_, countIsProblem_ ? colors.barHotkey : colors.barText);
     }
     int fieldRight = right - countWidth - cell;
     int left = box_.x + 4 * pixel + cell / 2;
     std::string toggle = replaceVisible_ ? "v" : ">";
-    ui::drawText(canvas, Chrome(), left, top, toggle, colors.barText, false);
+    ui::drawTextPlain(canvas, Chrome(), left, top, toggle, colors.barText);
     buttons_.push_back({{left, top, cell, line}, kToggleReplace});
     int fieldLeft = left + 2 * cell;
     findField_ = {fieldLeft, top, std::max(cell * 4, fieldRight - fieldLeft), line};

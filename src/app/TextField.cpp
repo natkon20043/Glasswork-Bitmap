@@ -204,7 +204,11 @@ void TextField::draw(ui::Canvas& canvas, ui::Font& font, int x, int y, int width
     canvas.pushClip({x, y, width, font.lineHeight()});
     int left = x - scrollCells_ * cellWidth;
     if (text_.empty() && !placeholder.empty()) {
-        ui::drawText(canvas, font, x, y, placeholder, placeholderColor, false);
+        if (shadow) {
+            ui::drawText(canvas, font, x, y, placeholder, placeholderColor, true);
+        } else {
+            ui::drawTextPlain(canvas, font, x, y, placeholder, placeholderColor);
+        }
     }
     size_t start = std::min(caret_, anchor_), end = std::max(caret_, anchor_);
     if (end > start && focused) {
@@ -217,12 +221,21 @@ void TextField::draw(ui::Canvas& canvas, ui::Font& font, int x, int y, int width
         size_t at = index;
         char32_t character = ui::decodeUtf8(text_, index);
         bool selected = focused && at >= start && at < end;
-        ui::drawGlyph(canvas, font, character, cursor, y, selected ? selectionText : text, shadow && !selected);
+        if (shadow && !selected) {
+            ui::drawGlyph(canvas, font, character, cursor, y, text, true);
+        } else {
+            ui::drawGlyphPlain(canvas, font, character, cursor, y, selected ? selectionText : text);
+        }
         cursor += ui::Font::cells(character) * cellWidth;
     }
     if (focused) {
         int caretX = left + caretCells * cellWidth;
-        canvas.fillShadowed({caretX, y + font.pixel(), std::max(1, font.pixel()), font.lineHeight() - 2 * font.pixel()}, caret, font.pixel());
+        ui::Rect bar{caretX, y + font.pixel(), std::max(1, font.pixel()), font.lineHeight() - 2 * font.pixel()};
+        if (shadow) {
+            canvas.fillShadowed(bar, caret, font.pixel());
+        } else {
+            canvas.fill(bar, caret);
+        }
     }
     canvas.popClip();
 }

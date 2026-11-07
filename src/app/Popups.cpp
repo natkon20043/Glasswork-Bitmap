@@ -145,7 +145,7 @@ void RetroTextBox::draw(ui::Canvas& canvas, int x, int y) {
     for (size_t index = 0; index < laidOut_.size(); ++index) {
         const TextLine& entry = laidOut_[index];
         Color color = index < bandLines_ ? colors.dialogTitleText : entry.color;
-        ui::drawText(canvas, Chrome(), x + inset + cell * (1 + entry.indent), top, entry.text, color, false);
+        ui::drawTextPlain(canvas, Chrome(), x + inset + cell * (1 + entry.indent), top, entry.text, color);
         top += line;
     }
 }
@@ -285,9 +285,9 @@ void CompletionPopup::draw(ui::Canvas& canvas) {
         int labelCells = ui::textCells(label);
         int detailRoom = cells - labelCells - 3;
         canvas.pushClip(row);
-        ui::drawText(canvas, Chrome(), row.x + cell, top, label, color, false);
+        ui::drawTextPlain(canvas, Chrome(), row.x + cell, top, label, color);
         if (item.deprecated) {
-            canvas.fillShadowed({row.x + cell, top + line / 2, labelCells * cell, pixel}, color, pixel);
+            canvas.fill({row.x + cell, top + line / 2, labelCells * cell, pixel}, color);
         }
         if (detailRoom > 3 && !item.detail.empty()) {
             std::string detail = item.detail.substr(0, item.detail.find('\n'));
@@ -295,7 +295,7 @@ void CompletionPopup::draw(ui::Canvas& canvas) {
                 detail = detail.substr(0, static_cast<size_t>(detailRoom - 1)) + "…";
             }
             int width = ui::textWidth(Chrome(), detail);
-            ui::drawText(canvas, Chrome(), row.right() - cell - width, top, detail, selected ? colors.barHighlightText : colors.barDim, false);
+            ui::drawTextPlain(canvas, Chrome(), row.right() - cell - width, top, detail, selected ? colors.barHighlightText : colors.barDim);
         }
         canvas.popClip();
         top += line;
@@ -410,7 +410,7 @@ void HoverBox::draw(ui::Canvas& canvas) {
         int y = rect_.y + inset;
         std::string before = signatureText_.substr(0, static_cast<size_t>(activeStart_));
         std::string active = signatureText_.substr(static_cast<size_t>(activeStart_), static_cast<size_t>(activeEnd_ - activeStart_));
-        ui::drawText(canvas, Chrome(), x + ui::textWidth(Chrome(), before), y, active, Colors().barHotkey, false);
+        ui::drawTextPlain(canvas, Chrome(), x + ui::textWidth(Chrome(), before), y, active, Colors().barHotkey);
     }
 }
 

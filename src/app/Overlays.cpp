@@ -151,7 +151,7 @@ void MenuOverlay::draw(ui::Canvas& canvas) {
         const MenuItem& item = menu.items[index];
         int height = itemHeight(item);
         if (item.isSeparator) {
-            canvas.fillShadowed({box.x + 2 * pixel, y + height / 2 - pixel, box.w - 4 * pixel, pixel}, colors.barText, pixel);
+            canvas.fill({box.x + 2 * pixel, y + height / 2 - pixel, box.w - 4 * pixel, pixel}, colors.barText);
             y += height;
             continue;
         }
@@ -163,14 +163,14 @@ void MenuOverlay::draw(ui::Canvas& canvas) {
         Color color = !enabled ? colors.barDim : highlighted ? colors.barHighlightText : colors.barText;
         Color hotkeyColor = enabled ? colors.barHotkey : color;
         if (item.checked && item.checked()) {
-            ui::drawGlyph(canvas, Chrome(), U'•', box.x + cell, y, color, false);
+            ui::drawGlyphPlain(canvas, Chrome(), U'•', box.x + cell, y, color);
         }
         int hotkey = -1;
         std::string title = ui::withoutHotkeyMark(item.title, &hotkey);
-        ui::drawWithHotkey(canvas, Chrome(), box.x + 2 * cell, y, title, hotkey, color, hotkeyColor);
+        ui::drawWithHotkey(canvas, Chrome(), box.x + 2 * cell, y, title, hotkey, color, hotkeyColor, false);
         if (!shortcuts_[index].empty()) {
             int width = ui::textWidth(Chrome(), shortcuts_[index]);
-            ui::drawText(canvas, Chrome(), box.right() - 2 * cell - width, y, shortcuts_[index], color, false);
+            ui::drawTextPlain(canvas, Chrome(), box.right() - 2 * cell - width, y, shortcuts_[index], color);
         }
         y += height;
     }
@@ -398,10 +398,10 @@ void DialogOverlay::draw(ui::Canvas& canvas) {
     ui::Rect strip{box_.x, box_.y, box_.w, line};
     canvas.fill(strip, colors.dialogTitle);
     int titleWidth = ui::textWidth(Chrome(), options_.title);
-    ui::drawText(canvas, Chrome(), strip.x + (strip.w - titleWidth) / 2, strip.y, options_.title, colors.dialogTitleText, false);
+    ui::drawTextPlain(canvas, Chrome(), strip.x + (strip.w - titleWidth) / 2, strip.y, options_.title, colors.dialogTitleText);
     int y = strip.bottom() + line / 2;
     for (const std::string& text : wrapped_) {
-        ui::drawText(canvas, Chrome(), box_.x + 3 * cell, y, text, colors.barText, false);
+        ui::drawTextPlain(canvas, Chrome(), box_.x + 3 * cell, y, text, colors.barText);
         y += line;
     }
     if (options_.hasField) {
@@ -421,7 +421,7 @@ void DialogOverlay::draw(ui::Canvas& canvas) {
         }
         int width = ui::textWidth(Chrome(), buttonTitles_[index]);
         ui::drawWithHotkey(canvas, Chrome(), button.x + (button.w - width) / 2, button.y - pixel, buttonTitles_[index],
-                           buttonHotkeys_[index], colors.dialogTitleText, colors.barHotkey);
+                           buttonHotkeys_[index], colors.dialogTitleText, colors.barHotkey, false);
     }
 }
 
@@ -563,7 +563,7 @@ void PaletteOverlay::draw(ui::Canvas& canvas) {
     int fieldY = box_.y + 4 * pixel;
     field_.draw(canvas, Chrome(), box_.x + 2 * cell, fieldY, box_.w - 4 * cell, colors.barText, colors.barHighlight,
                 colors.barHighlightText, colors.barText, true, false, placeholder_, colors.barDim);
-    canvas.fillShadowed({box_.x + 2 * pixel, fieldY + line + line / 4, box_.w - 4 * pixel, pixel}, colors.barText, pixel);
+    canvas.fill({box_.x + 2 * pixel, fieldY + line + line / 4, box_.w - 4 * pixel, pixel}, colors.barText);
     // The rows.
     for (size_t visible = 0; visible < 10 && scroll_ + visible < items_.size(); ++visible) {
         size_t index = scroll_ + visible;
@@ -586,19 +586,19 @@ void PaletteOverlay::draw(ui::Canvas& canvas) {
                 ++match;
             }
             bool matched = match < item.matched.size() && item.matched[match] == at;
-            ui::drawGlyph(canvas, Chrome(), character, x, row.y, matched ? colors.barHotkey : ink, false);
+            ui::drawGlyphPlain(canvas, Chrome(), character, x, row.y, matched ? colors.barHotkey : ink);
             x += ui::Font::cells(character) * cell;
         }
         if (!item.subtitle.empty()) {
-            ui::drawText(canvas, Chrome(), x + 2 * cell, row.y, item.subtitle, dim, false);
+            ui::drawTextPlain(canvas, Chrome(), x + 2 * cell, row.y, item.subtitle, dim);
         }
         canvas.popClip();
         if (!item.shortcut.empty()) {
-            ui::drawText(canvas, Chrome(), row.right() - shortcutWidth, row.y, item.shortcut, dim, false);
+            ui::drawTextPlain(canvas, Chrome(), row.right() - shortcutWidth, row.y, item.shortcut, dim);
         }
     }
     if (items_.empty()) {
-        ui::drawText(canvas, Chrome(), rowRect(0).x + cell, rowRect(0).y, "Nothing matches.", colors.barDim, false);
+        ui::drawTextPlain(canvas, Chrome(), rowRect(0).x + cell, rowRect(0).y, "Nothing matches.", colors.barDim);
     }
     // A little scrollbar when the list is longer than the box.
     if (items_.size() > 10) {
@@ -606,7 +606,7 @@ void PaletteOverlay::draw(ui::Canvas& canvas) {
         int trackHeight = 10 * line;
         int thumb = std::max(line / 2, trackHeight * 10 / static_cast<int>(items_.size()));
         int top = first.y + static_cast<int>((trackHeight - thumb) * scroll_ / std::max<size_t>(1, items_.size() - 10));
-        canvas.fillShadowed({box_.right() - 4 * pixel - 2 * pixel, top, 2 * pixel, thumb}, colors.barDim, pixel);
+        canvas.fill({box_.right() - 4 * pixel - 2 * pixel, top, 2 * pixel, thumb}, colors.barDim);
     }
 }
 
