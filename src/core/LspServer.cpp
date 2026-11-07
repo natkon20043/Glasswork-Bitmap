@@ -56,8 +56,9 @@ const std::vector<ServerSpec>& defaultServerSpecs() {
         {"typescript-language-server",
          {"typescript-language-server", "--stdio"},
          {"typescript", "typescriptreact", "javascript", "javascriptreact"},
-         "Install it with: npm install -g typescript-language-server, and give it TypeScript 6 (TypeScript 7 has "
-         "no tsserver): npm install --prefix \"" + utf8FromPath(supportFolder() / "typescript") + "\" typescript@6"},
+         "Install it with: npm install --prefix \"" + utf8FromPath(supportFolder() / "language-servers") +
+             "\" typescript-language-server typescript@6 (TypeScript 7 has no tsserver), or npm install -g "
+             "typescript-language-server typescript@6"},
         {"rust-analyzer", {"rust-analyzer"}, {"rust"}, "Install it with: rustup component add rust-analyzer"},
         {"gopls", {"gopls"}, {"go"}, "Install it with: go install golang.org/x/tools/gopls@latest"},
     };
@@ -77,7 +78,28 @@ std::string resolveProgram(const std::string& program) {
     if (program.empty()) {
         return std::string();
     }
-    return findExecutable(program);
+    std::string found = findExecutable(program);
+    if (!found.empty()) {
+        return found;
+    }
+    // Servers installed with npm into the app's own folder ("language-servers" in the settings folder).
+    namespace fs = std::filesystem;
+    fs::path bin = supportFolder() / "language-servers" / "node_modules" / ".bin";
+    std::error_code error;
+#ifdef _WIN32
+    for (const char* suffix : {".cmd", ".exe", ".bat"}) {
+        fs::path candidate = bin / pathFromUtf8(program + suffix);
+        if (fs::exists(candidate, error)) {
+            return utf8FromPath(candidate);
+        }
+    }
+#else
+    fs::path candidate = bin / pathFromUtf8(program);
+    if (fs::exists(candidate, error)) {
+        return utf8FromPath(candidate);
+    }
+#endif
+    return std::string();
 }
 
 std::string findTypeScriptServer(const std::string& serverProgram, const std::string& projectFolder, const std::string& support) {
@@ -311,7 +333,7 @@ bool LanguageServer::start(std::string* error) {
               {"references", Json::object()},
               {"rename", {{"prepareSupport", false}}},
               {"formatting", Json::object()},
-              {"publishDiagnostics", {{"versionSupport", true}}},
+              {"publishDiagnostics", {{"versionSupport", true}, {"tagSupport", {{"valueSet", Json::array({1, 2})}}}}},
               {"semanticTokens",
                {{"requests", {{"full", true}}},
                 {"tokenTypes", Json::array({"namespace", "type", "class", "enum", "interface", "struct", "typeParameter",

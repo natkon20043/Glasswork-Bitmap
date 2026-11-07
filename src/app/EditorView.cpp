@@ -1230,11 +1230,29 @@ void EditorView::drawText(ui::Canvas& canvas, size_t first, size_t last, bool fo
                     endByte = std::min(text.size(), buffer.nextCharacter({line, startByte}).column);
                 }
             }
+            // Unused code that is only a hint fades quietly; one the project makes a warning or error is underlined too.
+            bool quiet = item->severity >= 4 || (item->unnecessary && item->severity >= 3);
             forEachSegment(line, startByte, endByte, false, [&](double left, double right, double top) {
                 ui::Rect box = screenRect(left, right, top, 0);
-                drawSquiggle(canvas, box.x, box.right(), box.y, color);
+                if (item->unnecessary) {
+                    // Unused code fades into the background, as in VS Code; the message is on hover.
+                    canvas.fill({box.x, box.y, box.w, lineHeight_}, ui::withOpacity(background_, 0.55));
+                }
+                if (item->unnecessary && item->severity >= 3) {
+                    // Faded is enough.
+                } else if (item->severity >= 4) {
+                    // A hint: a few dots under its start.
+                    for (int dot = 0; dot < 3; ++dot) {
+                        canvas.fillShadowed({box.x + dot * 2 * pixel_, box.y + baseline_ + pixel_, pixel_, pixel_}, dimColor_, pixel_);
+                    }
+                } else {
+                    drawSquiggle(canvas, box.x, box.right(), box.y, color);
+                }
+                if (item->deprecated) {
+                    canvas.fillShadowed({box.x, box.y + baseline_ - lineHeight_ / 4, box.w, pixel_}, foreground_, pixel_);
+                }
             });
-            if (showInline && line != lastInlineLine && rowsForLine(line) == 1 && !folds_.isFoldHeader(line)) {
+            if (!quiet && showInline && line != lastInlineLine && rowsForLine(line) == 1 && !folds_.isFoldHeader(line)) {
                 lastInlineLine = line;
                 drawInlineMessage(canvas, item->message, item->severity, line);
             }

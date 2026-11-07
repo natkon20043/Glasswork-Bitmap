@@ -33,6 +33,10 @@ struct Diagnostic {
     int severity = 1;
     std::string message;
     std::string source;
+    /// Tagged unnecessary (an unused variable, unreachable code): drawn faded, not underlined.
+    bool unnecessary = false;
+    /// Tagged deprecated: drawn struck through.
+    bool deprecated = false;
     /// The server's own form, sent back with code-action requests.
     std::shared_ptr<lsp::Json> raw;
 };

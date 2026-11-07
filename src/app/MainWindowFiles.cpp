@@ -1338,7 +1338,15 @@ void MainWindow::reloadProblems() {
         rows.push_back(row);
     }
     if (rows.empty()) {
-        rows.push_back({"No problems.", colors.good});
+        std::string hint = language_->installHintForLanguage(tab->document->languageId);
+        if (!hint.empty()) {
+            // No server to ask: say so, and how to get one, rather than "No problems."
+            for (const std::string& piece : ui::wrapText(hint, static_cast<size_t>(std::max(10, list_.frame().w / (6 * Services::shared().chromePixel()) - 1)))) {
+                rows.push_back({piece, colors.warning});
+            }
+        } else {
+            rows.push_back({"No problems.", colors.good});
+        }
     }
     list_.setRows(std::move(rows));
     dirty_ = true;
@@ -1604,6 +1612,13 @@ void MainWindow::updateStatus() {
     }
     if (!extensionMessage_.empty()) {
         news.push_back(extensionMessage_);
+    }
+    // A file whose language server is missing says so, instead of quietly showing no problems.
+    if (Tab* tab = currentTab(); tab && tab->kind == Tab::Kind::Text && !tab->path().empty()) {
+        std::string status = language_->statusTextForLanguage(tab->document->languageId);
+        if (status.find("isn't installed") != std::string::npos) {
+            news.push_back(status + " (see Issues)");
+        }
     }
     if (Services::shared().installingDefaults()) {
         news.push_back("Installing language extensions...");

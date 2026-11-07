@@ -663,6 +663,14 @@ void LanguageService::receivedDiagnostics(const std::vector<lsp::Diagnostic>& di
                 item.message = diagnostic.message;
                 item.source = diagnostic.source;
                 item.raw = std::make_shared<lsp::Json>(diagnostic.toJson());
+                if (item.raw->contains("tags") && (*item.raw)["tags"].is_array()) {
+                    for (const lsp::Json& tag : (*item.raw)["tags"]) {
+                        if (tag.is_number_integer()) {
+                            item.unnecessary = item.unnecessary || tag.get<int>() == 1;
+                            item.deprecated = item.deprecated || tag.get<int>() == 2;
+                        }
+                    }
+                }
                 (*item.raw)["__gwServer"] = serverName;
                 converted.push_back(std::move(item));
             } catch (const std::exception&) {
