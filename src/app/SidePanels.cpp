@@ -91,13 +91,17 @@ void ListView::draw(ui::Canvas& canvas, bool focused) {
         int x = frame_.x + pixel;
         if (row.hasIcon) {
             ui::Rect size = ui::iconSize(row.icon, pixel);
-            ui::drawIcon(canvas, row.icon, x + (iconColumn - size.w) / 2 / pixel * pixel, top + (line - size.h) / 2 / pixel * pixel, pixel,
-                         row.iconColor, true);
+            int iconX = x + (iconColumn - size.w) / 2 / pixel * pixel, iconY = top + (line - size.h) / 2 / pixel * pixel;
+            if (highlighted) {
+                ui::drawIconPlain(canvas, row.icon, iconX, iconY, pixel, row.iconColor);  // no shadow on the bar
+            } else {
+                ui::drawIcon(canvas, row.icon, iconX, iconY, pixel, row.iconColor, true);
+            }
             x += iconColumn + 2 * pixel;
         }
         std::string text = fitted(row.text, row.hasIcon ? cells : (frame_.w - pixel) / Cell());
         if (highlighted) {
-            ui::drawText(canvas, Chrome(), x, top, text, colors.selectionText, false);
+            ui::drawTextPlain(canvas, Chrome(), x, top, text, colors.selectionText);
         } else {
             ui::drawText(canvas, Chrome(), x, top, text, row.textColor, true);
         }
@@ -322,8 +326,11 @@ void DebugPanel::draw(ui::Canvas& canvas, bool focused) {
         if (selected) {
             canvas.fill({frame_.x, top, frame_.w, line}, colors.selection);
         }
-        ui::drawText(canvas, Chrome(), frame_.x + cell / 2, top, fitted(text, cells - 1), selected ? colors.selectionText : colors.text,
-                     !selected);
+        if (selected) {
+            ui::drawTextPlain(canvas, Chrome(), frame_.x + cell / 2, top, fitted(text, cells - 1), colors.selectionText);
+        } else {
+            ui::drawText(canvas, Chrome(), frame_.x + cell / 2, top, fitted(text, cells - 1), colors.text, true);
+        }
         hits_.push_back({{frame_.x, top, frame_.w, line}, 2, static_cast<int>(index)});
     }
     y = stackArea_.bottom();
