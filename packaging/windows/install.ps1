@@ -24,12 +24,15 @@ if (-not (Test-Path (Join-Path $hostSource "main.js"))) {
 
 $dest = Join-Path $env:LOCALAPPDATA "Programs\Glasswork Bitmap"
 $running = Get-Process glasswork-bitmap -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "$dest*" }
-if ($running) {
-    throw "Glasswork Bitmap is running from $dest. Quit it first, then run the installer again."
-}
 
 New-Item -ItemType Directory -Force -Path $dest | Out-Null
-Copy-Item $exe (Join-Path $dest "glasswork-bitmap.exe") -Force
+$installed = Join-Path $dest "glasswork-bitmap.exe"
+Remove-Item (Join-Path $dest "glasswork-bitmap.exe.old") -Force -ErrorAction SilentlyContinue
+if ($running -and (Test-Path $installed)) {
+    # A running program can't be overwritten, but it can be renamed: the new one starts next time.
+    Rename-Item $installed "glasswork-bitmap.exe.old" -Force
+}
+Copy-Item $exe $installed -Force
 $hostDest = Join-Path $dest "host"
 if (Test-Path $hostDest) {
     Remove-Item $hostDest -Recurse -Force
@@ -84,4 +87,5 @@ $size = [int]((Get-ChildItem $dest -Recurse | Measure-Object Length -Sum).Sum / 
 Set-ItemProperty -Path $uninstall -Name "EstimatedSize" -Value $size -Type DWord
 
 Write-Host "Glasswork Bitmap is installed in $dest"
+if ($running) { Write-Host "It is running now: the new version starts the next time you open it." }
 Write-Host "Start it from the Start menu, or run: glasswork-bitmap [folder]"
