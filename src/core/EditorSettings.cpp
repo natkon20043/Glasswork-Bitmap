@@ -1,0 +1,307 @@
+#include "EditorSettings.hpp"
+
+#include <algorithm>
+
+#include "Jsonc.hpp"
+
+#include <cstdio>
+#include <sstream>
+
+namespace gw {
+
+using nlohmann::json;
+
+namespace {
+
+/// Reads a style object: {"foreground": "#..", "background": "#..", "fontStyle": "bold"}.
+StyleOverride readStyle(const json& object) {
+    StyleOverride style;
+    if (!object.is_object()) {
+        return style;
+    }
+    if (object.contains("foreground") && object["foreground"].is_string()) {
+        style.foreground = parseColor(object["foreground"].get<std::string>());
+    }
+    if (object.contains("background") && object["background"].is_string()) {
+        style.background = parseColor(object["background"].get<std::string>());
+    }
+    if (object.contains("fontStyle") && object["fontStyle"].is_string()) {
+        applyFontStyleString(style, object["fontStyle"].get<std::string>());
+    }
+    return style;
+}
+
+json writeStyle(const StyleOverride& style) {
+    json object = json::object();
+    if (style.foreground) {
+        object["foreground"] = colorToHex(*style.foreground);
+    }
+    if (style.background) {
+        object["background"] = colorToHex(*style.background);
+    }
+    if (style.bold || style.italic || style.underline) {
+        object["fontStyle"] = fontStyleString(style);
+    }
+    return object;
+}
+
+template <typename Value>
+void readValue(const json& document, const char* key, Value& into) {
+    if (!document.contains(key)) {
+        return;
+    }
+    const json& value = document[key];
+    if constexpr (std::is_same_v<Value, bool>) {
+        if (value.is_boolean()) {
+            into = value.get<bool>();
+        }
+    } else if constexpr (std::is_same_v<Value, std::string>) {
+        if (value.is_string()) {
+            into = value.get<std::string>();
+        }
+    } else {
+        if (value.is_number()) {
+            into = value.get<Value>();
+        }
+    }
+}
+
+/// Indents every line of a JSON dump so it nests inside the hand-written template.
+std::string indented(const json& value, int spaces) {
+    std::string dump = value.dump(2);
+    std::string padding(static_cast<size_t>(spaces), ' ');
+    std::string result;
+    for (size_t index = 0; index < dump.size(); ++index) {
+        result += dump[index];
+        if (dump[index] == '\n') {
+            result += padding;
+        }
+    }
+    return result;
+}
+
+}  // namespace
+
+std::string colorToHex(Color color) {
+    char buffer[12];
+    uint32_t alpha = color & 0xFF;
+    if (alpha == 0xFF) {
+        std::snprintf(buffer, sizeof buffer, "#%06X", color >> 8);
+    } else {
+        std::snprintf(buffer, sizeof buffer, "#%08X", color);
+    }
+    return buffer;
+}
+
+std::string fontStyleString(const StyleOverride& style) {
+    std::string result;
+    auto add = [&result](const char* word) {
+        if (!result.empty()) {
+            result += ' ';
+        }
+        result += word;
+    };
+    if (style.bold.value_or(false)) {
+        add("bold");
+    }
+    if (style.italic.value_or(false)) {
+        add("italic");
+    }
+    if (style.underline.value_or(false)) {
+        add("underline");
+    }
+    return result;
+}
+
+void applyFontStyleString(StyleOverride& style, const std::string& fontStyle) {
+    style.bold = fontStyle.find("bold") != std::string::npos;
+    style.italic = fontStyle.find("italic") != std::string::npos;
+    style.underline = fontStyle.find("underline") != std::string::npos;
+}
+
+EditorSettings parseSettings(const std::string& jsonc, std::string* error) {
+    EditorSettings settings;
+    json document = parseJsonc(jsonc);
+    if (document.is_discarded() || !document.is_object()) {
+        if (error) {
+            *error = "settings.json isn't valid JSON, so the defaults are in use.";
+        }
+        return settings;
+    }
+
+    readValue(document, "editor.fontSize", settings.fontSize);
+    readValue(document, "editor.fontFamily", settings.fontFamily);
+    readValue(document, "editor.tabSize", settings.tabSize);
+    readValue(document, "editor.wordWrap", settings.wordWrap);
+    readValue(document, "editor.opacity", settings.editorOpacity);
+    readValue(document, "window.glassTint", settings.glassTint);
+    readValue(document, "window.frostedBackdrop", settings.frostedBackdrop);
+    readValue(document, "window.glassStyle", settings.glassStyle);
+    readValue(document, "workbench.colorTheme", settings.theme);
+    readValue(document, "workbench.iconTheme", settings.iconTheme);
+    readValue(document, "bitmap.colors", settings.bitmapColors);
+    readValue(document, "bitmap.font", settings.bitmapFont);
+    if (document.contains("extensions.disabled") && document["extensions.disabled"].is_array()) {
+        for (const auto& id : document["extensions.disabled"]) {
+            if (id.is_string()) {
+                settings.disabledExtensions.push_back(id.get<std::string>());
+            }
+        }
+    }
+    readValue(document, "editor.highlightOccurrences", settings.highlightOccurrences);
+    readValue(document, "editor.minimap", settings.showMinimap);
+    readValue(document, "editor.vim", settings.vimMode);
+    readValue(document, "editor.vimCursorSmear", settings.vimCursorSmear);
+    readValue(document, "editor.indentGuides", settings.indentGuides);
+    readValue(document, "editor.bracketPairColorization", settings.bracketPairColors);
+    readValue(document, "editor.sectionDividers", settings.sectionDividers);
+    readValue(document, "editor.inlineDiagnostics", settings.inlineDiagnostics);
+    readValue(document, "editor.inlayHints.enabled", settings.inlayHints);
+    readValue(document, "editor.stickyScroll", settings.stickyScroll);
+    readValue(document, "editor.semanticHighlighting", settings.semanticHighlighting);
+    readValue(document, "lsp.enabled", settings.languageServers);
+    readValue(document, "editor.rainbowVariables", settings.colors.rainbowVariables);
+    readValue(document, "files.autoSave", settings.autoSave);
+    readValue(document, "files.trimTrailingWhitespace", settings.trimTrailingWhitespace);
+    readValue(document, "files.insertFinalNewline", settings.insertFinalNewline);
+    readValue(document, "files.formatOnSave", settings.formatOnSave);
+    readValue(document, "terminal.fontSize", settings.terminalFontSize);
+    readValue(document, "terminal.shell", settings.terminalShell);
+
+    if (document.contains("editor.tokenColors") && document["editor.tokenColors"].is_array()) {
+        for (const json& entry : document["editor.tokenColors"]) {
+            if (!entry.is_object() || !entry.contains("scope") || !entry["scope"].is_string()) {
+                continue;
+            }
+            ScopeStyleRule rule;
+            rule.scope = entry["scope"].get<std::string>();
+            rule.style = readStyle(entry);
+            settings.colors.scopeRules.push_back(rule);
+        }
+    }
+    if (document.contains("editor.identifierColors") && document["editor.identifierColors"].is_object()) {
+        for (const auto& [name, value] : document["editor.identifierColors"].items()) {
+            StyleOverride style = readStyle(value);
+            if (!style.empty()) {
+                settings.colors.identifiers[name] = style;
+            }
+        }
+    }
+
+    // Keep values in sensible ranges even if the file says otherwise.
+    settings.fontSize = std::clamp(settings.fontSize, 8.0, 40.0);
+    settings.tabSize = std::clamp(settings.tabSize, 1, 16);
+    settings.editorOpacity = std::clamp(settings.editorOpacity, 0.15, 1.0);
+    settings.glassTint = std::clamp(settings.glassTint, 0.0, 1.0);
+    if (settings.glassStyle != "clear") {
+        settings.glassStyle = "regular";
+    }
+    if (settings.terminalFontSize != 0) {
+        settings.terminalFontSize = std::clamp(settings.terminalFontSize, 8.0, 40.0);
+    }
+    return settings;
+}
+
+const std::vector<std::string>& knownSettingKeys() {
+    static const std::vector<std::string> keys = {
+        "editor.fontSize", "editor.fontFamily", "editor.tabSize", "editor.wordWrap", "editor.opacity", "window.glassTint",
+        "window.frostedBackdrop", "window.glassStyle", "workbench.colorTheme", "workbench.iconTheme", "bitmap.colors",
+        "bitmap.font", "extensions.disabled", "editor.highlightOccurrences", "editor.minimap", "editor.vim",
+        "editor.vimCursorSmear", "editor.indentGuides", "editor.bracketPairColorization", "editor.sectionDividers",
+        "editor.inlineDiagnostics", "editor.inlayHints.enabled", "editor.stickyScroll", "editor.semanticHighlighting",
+        "lsp.enabled", "editor.rainbowVariables", "files.autoSave", "files.trimTrailingWhitespace",
+        "files.insertFinalNewline", "files.formatOnSave", "terminal.fontSize", "terminal.shell", "editor.tokenColors",
+        "editor.identifierColors"};
+    return keys;
+}
+
+std::string serializeSettings(const EditorSettings& settings, const json& otherSettings) {
+    json tokenColors = json::array();
+    for (const ScopeStyleRule& rule : settings.colors.scopeRules) {
+        json entry = writeStyle(rule.style);
+        entry["scope"] = rule.scope;
+        tokenColors.push_back(entry);
+    }
+    json identifierColors = json::object();
+    for (const auto& [name, style] : settings.colors.identifiers) {
+        identifierColors[name] = writeStyle(style);
+    }
+    auto boolean = [](bool value) { return value ? "true" : "false"; };
+
+    std::ostringstream out;
+    out << "// Glasswork Bitmap settings. Edit and save: changes apply straight away.\n"
+        << "// This file is JSON with comments; trailing commas are fine.\n"
+        << "{\n"
+        << "  // Text\n"
+        << "  \"editor.fontSize\": " << settings.fontSize << ",  // the pixel font grows in whole pixels (Ctrl+= and Ctrl+-)\n"
+        << "  \"editor.tabSize\": " << settings.tabSize << ",\n"
+        << "  \"editor.wordWrap\": " << boolean(settings.wordWrap) << ",  // wrap long lines (View > Word Wrap, Alt+Z)\n"
+        << "\n"
+        << "  // Look\n"
+        << "  \"bitmap.colors\": " << json(settings.bitmapColors).dump()
+        << ",  // \"Turbo\", \"Low Tide\" or \"Phosphor\" (Options menu)\n"
+        << "  \"bitmap.font\": " << json(settings.bitmapFont).dump()
+        << ",  // the code font; empty = the built-in pixel font (Options > Other Font)\n"
+        << "  \"editor.vimCursorSmear\": " << boolean(settings.vimCursorSmear)
+        << ",  // the Vim cursor leaves a trail when it jumps (Options > Cursor Smear)\n"
+        << "  \"editor.highlightOccurrences\": " << boolean(settings.highlightOccurrences)
+        << ",  // highlight the word under the caret everywhere\n"
+        << "  \"editor.inlineDiagnostics\": " << boolean(settings.inlineDiagnostics)
+        << ",  // show each problem's message at the end of its line\n"
+        << "  \"editor.inlayHints.enabled\": " << boolean(settings.inlayHints)
+        << ",  // parameter names and inferred types, shown inline\n"
+        << "  \"editor.semanticHighlighting\": " << boolean(settings.semanticHighlighting)
+        << ",  // color types and functions by what the language server knows they are\n"
+        << "\n"
+        << "  // Files\n"
+        << "  \"files.autoSave\": " << boolean(settings.autoSave)
+        << ",  // save a moment after you stop typing, and when you switch away\n"
+        << "  \"files.trimTrailingWhitespace\": " << boolean(settings.trimTrailingWhitespace)
+        << ",  // .editorconfig files can override this per file type\n"
+        << "  \"files.insertFinalNewline\": " << boolean(settings.insertFinalNewline) << ",\n"
+        << "  \"files.formatOnSave\": " << boolean(settings.formatOnSave)
+        << ",  // run the language server's formatter when you press Ctrl+S\n"
+        << "\n"
+        << "  // Terminal\n"
+        << "  \"terminal.fontSize\": " << settings.terminalFontSize << ",  // 0 = the editor's size\n"
+        << "  \"terminal.shell\": " << json(settings.terminalShell).dump()
+        << ",  // empty = PowerShell on Windows, your login shell on Linux\n"
+        << "\n"
+        << "  // Language servers and extensions\n"
+        << "  \"lsp.enabled\": " << boolean(settings.languageServers)
+        << ",  // language servers: problems, completion, hover, rename\n"
+        << "  \"extensions.disabled\": " << json(settings.disabledExtensions).dump()
+        << ",  // extensions switched off (Extensions > Manage Extensions)\n"
+        << "\n"
+        << "  // Colors\n"
+        << "  // Color any kind of code. \"scope\" is a TextMate selector such as \"keyword.control\",\n"
+        << "  // \"variable.parameter\" or \"meta.function string\". Each entry can set \"foreground\",\n"
+        << "  // \"background\" (a highlight) and \"fontStyle\" (\"bold\", \"italic\", \"underline\").\n"
+        << "  \"editor.tokenColors\": " << indented(tokenColors, 2) << ",\n"
+        << "\n"
+        << "  // Color specific names wherever they appear in code, e.g.\n"
+        << "  // \"total\": { \"foreground\": \"#FFD700\", \"background\": \"#FFD70033\" }\n"
+        << "  \"editor.identifierColors\": " << indented(identifierColors, 2);
+    // Settings this program doesn't use itself (language servers' and extensions' own, such as
+    // "python.analysis.typeCheckingMode") are kept as they were.
+    bool wroteOthers = false;
+    if (otherSettings.is_object()) {
+        const auto& known = knownSettingKeys();
+        for (const auto& [key, value] : otherSettings.items()) {
+            if (std::find(known.begin(), known.end(), key) != known.end()) {
+                continue;
+            }
+            if (!wroteOthers) {
+                out << ",\n\n  // Other settings (language servers, extensions)\n";
+                wroteOthers = true;
+            } else {
+                out << ",\n";
+            }
+            out << "  " << json(key).dump() << ": " << indented(value, 2);
+        }
+    }
+    out << "\n}\n";
+    return out.str();
+}
+
+}  // namespace gw

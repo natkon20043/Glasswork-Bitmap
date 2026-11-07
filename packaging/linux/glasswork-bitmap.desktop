@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Glasswork Bitmap
+GenericName=Code Editor
+Comment=A code editor in the style of the DOS IDEs
+Exec=@EXEC@ %F
+Icon=glasswork-bitmap
+Terminal=false
+Categories=Development;TextEditor;IDE;
+MimeType=text/plain;inode/directory;
+StartupWMClass=dev.glasswork.bitmap
+Keywords=editor;code;vim;ide;
