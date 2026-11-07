@@ -78,5 +78,7 @@ int textWidth(Font& font, std::string_view text);
 int drawText(Canvas& canvas, Font& font, int x, int y, std::string_view text, Color color, bool shadow);
 /// One character in its cell(s).
 void drawGlyph(Canvas& canvas, Font& font, char32_t character, int x, int y, Color color, bool shadow);
+/// Without the shadow: only for a character inside a block cursor, drawn in the background's color.
+void drawGlyphPlain(Canvas& canvas, Font& font, char32_t character, int x, int y, Color color);
 
 }  // namespace gw::ui

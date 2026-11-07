@@ -71,10 +71,9 @@ Rect iconSize(Icon icon, int pixel) {
 }
 
 void drawIcon(Canvas& canvas, Icon icon, int x, int y, int pixel, Color color, bool shadow) {
+    (void)shadow;  // every icon casts the shadow
     const IconArt& art = artFor(icon);
-    if (shadow) {
-        fillArt(canvas, art, x + pixel, y + pixel, pixel, kBlackColor);
-    }
+    fillArt(canvas, art, x + pixel, y + pixel, pixel, kBlackColor);
     fillArt(canvas, art, x, y, pixel, color);
 }
 

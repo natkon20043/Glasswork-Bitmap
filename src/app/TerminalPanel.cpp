@@ -444,7 +444,7 @@ void TerminalPanel::draw(ui::Canvas& canvas, bool focused) {
         ui::drawText(canvas, Chrome(), right, strip.y, labels[button], colors.text, true);
         stripButtons_.push_back({{right, strip.y, width, strip.h}, -(button + 1)});
     }
-    canvas.fill({strip.x, strip.bottom(), strip.w, pixel}, colors.frameDim);
+    canvas.fillShadowed({strip.x, strip.bottom(), strip.w, pixel}, colors.frameDim, std::max(1, font_->pixel()));
 
     TerminalSession* session = current();
     ui::Rect area = screenRect();
@@ -504,10 +504,10 @@ void TerminalPanel::draw(ui::Canvas& canvas, bool focused) {
             }
             int width = (cellValue.attributes & term::kWideStart) ? 2 : 1;
             if (cellValue.attributes & term::kUnderline) {
-                canvas.fill({cellX, y + font.baseline() + font.pixel(), width * cellWidth, std::max(1, font.pixel())}, color);
+                canvas.fillShadowed({cellX, y + font.baseline() + font.pixel(), width * cellWidth, std::max(1, font.pixel())}, color, std::max(1, font_->pixel()));
             }
             if (cellValue.attributes & term::kStrike) {
-                canvas.fill({cellX, y + cellHeight / 2, width * cellWidth, std::max(1, font.pixel())}, color);
+                canvas.fillShadowed({cellX, y + cellHeight / 2, width * cellWidth, std::max(1, font.pixel())}, color, std::max(1, font_->pixel()));
             }
         }
     }
@@ -517,13 +517,15 @@ void TerminalPanel::draw(ui::Canvas& canvas, bool focused) {
         int cursorColumn = screen.cursorColumn(), cursorRow = screen.cursorRow();
         ui::Rect rect{area.x + cursorColumn * cellWidth, area.y + cursorRow * cellHeight, cellWidth, cellHeight};
         if (focused_) {
-            canvas.fill(rect, ui::withOpacity(cursorColor_, 0.9));
+            canvas.fillShadowed(rect, ui::kWhiteColor, std::max(1, font.pixel()));
             term::Cell under = screen.cellAt(cursorRow, cursorColumn);
             if (under.character > ' ') {
-                ui::drawGlyph(canvas, font, static_cast<char32_t>(under.character), rect.x, rect.y, background_, false);
+                ui::drawGlyphPlain(canvas, font, static_cast<char32_t>(under.character), rect.x, rect.y, background_);
             }
         } else {
-            canvas.frame(rect, cursorColor_, std::max(1, font.pixel() / 2));
+            int line = std::max(1, font.pixel() / 2);
+            canvas.frame(rect.offset(line, line), ui::kBlackColor, line);
+            canvas.frame(rect, ui::kWhiteColor, line);
         }
     }
     // A slim indicator while looking at the history.
@@ -532,7 +534,7 @@ void TerminalPanel::draw(ui::Canvas& canvas, bool focused) {
         int trackHeight = area.h;
         int thumbHeight = std::max(Line(), static_cast<int>(trackHeight * rows / total));
         int thumbTop = area.y + static_cast<int>((trackHeight - thumbHeight) * (1.0 - static_cast<double>(scrollOffset_) / screen.historyCount()));
-        canvas.fill({area.right() - 2 * pixel, thumbTop, 2 * pixel, thumbHeight}, selectionColor_);
+        canvas.fillShadowed({area.right() - 2 * pixel, thumbTop, 2 * pixel, thumbHeight}, selectionColor_, std::max(1, font_->pixel()));
     }
     canvas.popClip();
     canvas.popClip();

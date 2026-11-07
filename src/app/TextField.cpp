@@ -222,7 +222,7 @@ void TextField::draw(ui::Canvas& canvas, ui::Font& font, int x, int y, int width
     }
     if (focused) {
         int caretX = left + caretCells * cellWidth;
-        canvas.fill({caretX, y + font.pixel(), std::max(1, font.pixel()), font.lineHeight() - 2 * font.pixel()}, caret);
+        canvas.fillShadowed({caretX, y + font.pixel(), std::max(1, font.pixel()), font.lineHeight() - 2 * font.pixel()}, caret, font.pixel());
     }
     canvas.popClip();
 }

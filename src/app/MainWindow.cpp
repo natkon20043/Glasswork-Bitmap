@@ -619,10 +619,10 @@ void MainWindow::drawFrame(const ui::Rect& rect, Color color, bool twoLines) {
     auto ring = [&](int inLeft, int inTop, int inRight, int inBottom) {
         int left = rect.x + inLeft, right = rect.right() - inRight - pixel;
         int top = rect.y + inTop, bottom = rect.bottom() - inBottom - pixel;
-        canvas_.fill({left, top, right - left + pixel, pixel}, color);
-        canvas_.fill({left, bottom, right - left + pixel, pixel}, color);
-        canvas_.fill({left, top, pixel, bottom - top + pixel}, color);
-        canvas_.fill({right, top, pixel, bottom - top + pixel}, color);
+        canvas_.fillShadowed({left, top, right - left + pixel, pixel}, color, Pixel());
+        canvas_.fillShadowed({left, bottom, right - left + pixel, pixel}, color, Pixel());
+        canvas_.fillShadowed({left, top, pixel, bottom - top + pixel}, color, Pixel());
+        canvas_.fillShadowed({right, top, pixel, bottom - top + pixel}, color, Pixel());
     };
     if (twoLines) {
         ring(2 * pixel, line / 2 - pixel, 2 * pixel, line / 2 - pixel);
@@ -810,8 +810,8 @@ void MainWindow::drawScrollbar(const Geometry& g, bool vertical) {
     canvas_.fillChecker(vertical ? g.track : g.sideTrack, colors.window, colors.scrollTrack, pixel);
     const ui::Rect& back = vertical ? g.upArrow : g.leftArrow;
     const ui::Rect& forward = vertical ? g.downArrow : g.rightArrow;
-    canvas_.fill(back, colors.scrollButton);
-    canvas_.fill(forward, colors.scrollButton);
+    canvas_.fillShadowed(back, colors.scrollButton, pixel);
+    canvas_.fillShadowed(forward, colors.scrollButton, pixel);
     auto arrow = [&](ui::Icon icon, const ui::Rect& box) {
         ui::Rect size = ui::iconSize(icon, pixel);
         ui::drawIcon(canvas_, icon, box.x + Snap((box.w - size.w) / 2.0), box.y + Snap((box.h - size.h) / 2.0), pixel, colors.scrollArrow,
@@ -821,7 +821,7 @@ void MainWindow::drawScrollbar(const Geometry& g, bool vertical) {
     arrow(vertical ? ui::Icon::Down : ui::Icon::Right, forward);
     ui::Rect thumb = thumbRect(g, vertical);
     if (!thumb.empty()) {
-        canvas_.fill(thumb, colors.scrollThumb);
+        canvas_.fillShadowed(thumb, colors.scrollThumb, pixel);
     }
 }
 
@@ -889,7 +889,7 @@ void MainWindow::drawStatusLine(const Geometry& g) {
         hintCommands_.push_back(hint.command);
         x += 2 * Cell();
     }
-    canvas_.fill({x - Cell(), g.status.y + 2 * Pixel(), Pixel(), Line() - 4 * Pixel()}, colors.barText);
+    canvas_.fillShadowed({x - Cell(), g.status.y + 2 * Pixel(), Pixel(), Line() - 4 * Pixel()}, colors.barText, Pixel());
     std::string message = !temporaryMessage_.empty() ? temporaryMessage_ : message_;
     if (!message.empty()) {
         int width = ui::textWidth(Chrome(), message);

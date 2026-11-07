@@ -151,7 +151,7 @@ void MenuOverlay::draw(ui::Canvas& canvas) {
         const MenuItem& item = menu.items[index];
         int height = itemHeight(item);
         if (item.isSeparator) {
-            canvas.fill({box.x + 2 * pixel, y + height / 2 - pixel, box.w - 4 * pixel, pixel}, colors.barText);
+            canvas.fillShadowed({box.x + 2 * pixel, y + height / 2 - pixel, box.w - 4 * pixel, pixel}, colors.barText, pixel);
             y += height;
             continue;
         }
@@ -563,7 +563,7 @@ void PaletteOverlay::draw(ui::Canvas& canvas) {
     int fieldY = box_.y + 4 * pixel;
     field_.draw(canvas, Chrome(), box_.x + 2 * cell, fieldY, box_.w - 4 * cell, colors.barText, colors.barHighlight,
                 colors.barHighlightText, colors.barText, true, false, placeholder_, colors.barDim);
-    canvas.fill({box_.x + 2 * pixel, fieldY + line + line / 4, box_.w - 4 * pixel, pixel}, colors.barText);
+    canvas.fillShadowed({box_.x + 2 * pixel, fieldY + line + line / 4, box_.w - 4 * pixel, pixel}, colors.barText, pixel);
     // The rows.
     for (size_t visible = 0; visible < 10 && scroll_ + visible < items_.size(); ++visible) {
         size_t index = scroll_ + visible;
@@ -606,7 +606,7 @@ void PaletteOverlay::draw(ui::Canvas& canvas) {
         int trackHeight = 10 * line;
         int thumb = std::max(line / 2, trackHeight * 10 / static_cast<int>(items_.size()));
         int top = first.y + static_cast<int>((trackHeight - thumb) * scroll_ / std::max<size_t>(1, items_.size() - 10));
-        canvas.fill({box_.right() - 4 * pixel - 2 * pixel, top, 2 * pixel, thumb}, colors.barDim);
+        canvas.fillShadowed({box_.right() - 4 * pixel - 2 * pixel, top, 2 * pixel, thumb}, colors.barDim, pixel);
     }
 }
 

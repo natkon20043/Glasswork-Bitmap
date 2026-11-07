@@ -79,6 +79,11 @@ public:
     /// A checkerboard of two colors in squares of `cell` pixels, anchored to the canvas, like the
     /// shaded characters of a text screen.
     void fillChecker(const Rect& rect, Color first, Color second, int cell);
+    /// `rect` in `color` over its hard black shadow, `offset` pixels right and down.
+    void fillShadowed(const Rect& rect, Color color, int offset) {
+        fill(rect.offset(offset, offset), 0x000000FF);
+        fill(rect, color);
+    }
     /// A line of `thickness` pixels just inside the rectangle's edge.
     void frame(const Rect& rect, Color color, int thickness);
 

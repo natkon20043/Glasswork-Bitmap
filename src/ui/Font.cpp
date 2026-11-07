@@ -93,12 +93,21 @@ void drawGlyph(Canvas& canvas, Font& font, char32_t character, int x, int y, Col
     if (glyph.mask.empty()) {
         return;
     }
-    if (shadow) {
-        int offset = font.pixel();
-        canvas.blendMask(glyph.mask.data(), glyph.width, glyph.height, x + glyph.left + offset, y + glyph.top + offset,
-                         kBlackColor);
-    }
+    // The bitmap look: everything casts the hard black shadow, so the flag no longer turns it off.
+    (void)shadow;
+    int offset = font.pixel();
+    canvas.blendMask(glyph.mask.data(), glyph.width, glyph.height, x + glyph.left + offset, y + glyph.top + offset, kBlackColor);
     canvas.blendMask(glyph.mask.data(), glyph.width, glyph.height, x + glyph.left, y + glyph.top, color);
+}
+
+void drawGlyphPlain(Canvas& canvas, Font& font, char32_t character, int x, int y, Color color) {
+    if (character == ' ' || character == '\t') {
+        return;
+    }
+    const Glyph& glyph = font.glyph(character);
+    if (!glyph.mask.empty()) {
+        canvas.blendMask(glyph.mask.data(), glyph.width, glyph.height, x + glyph.left, y + glyph.top, color);
+    }
 }
 
 int drawText(Canvas& canvas, Font& font, int x, int y, std::string_view text, Color color, bool shadow) {

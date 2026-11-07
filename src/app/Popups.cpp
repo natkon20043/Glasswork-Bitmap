@@ -287,7 +287,7 @@ void CompletionPopup::draw(ui::Canvas& canvas) {
         canvas.pushClip(row);
         ui::drawText(canvas, Chrome(), row.x + cell, top, label, color, false);
         if (item.deprecated) {
-            canvas.fill({row.x + cell, top + line / 2, labelCells * cell, pixel}, color);
+            canvas.fillShadowed({row.x + cell, top + line / 2, labelCells * cell, pixel}, color, pixel);
         }
         if (detailRoom > 3 && !item.detail.empty()) {
             std::string detail = item.detail.substr(0, item.detail.find('\n'));

@@ -245,7 +245,8 @@ void EditorView::reloadAppearance() {
     foreground_ = theme.color("editor.foreground", scheme.text);
     selectionColor_ = theme.color("editor.selectionBackground", scheme.selection);
     lineHighlight_ = theme.color("editor.lineHighlightBackground", 0xFFFFFF10);
-    caretColor_ = theme.color("editorCursor.foreground", scheme.text);
+    // A solid white cursor in every scheme, over a hard black shadow like the text.
+    caretColor_ = ui::kWhiteColor;
     matchColor_ = theme.color("editorBracketMatch.border", scheme.text);
     occurrenceColor_ = theme.color("editor.wordHighlightBackground", 0x5555FF60);
     findColor_ = theme.color("editor.findMatchHighlightBackground", 0xAA550080);
@@ -842,21 +843,25 @@ void EditorView::drawGutter(ui::Canvas& canvas, size_t first, size_t last) {
         bool isExecution = executionLine_ >= 0 && static_cast<size_t>(executionLine_) == line;
         if (hasBreakpoint) {
             int dot = 5 * pixel_;
-            canvas.fill({frame_.x + 2 * pixel_, top + (lineHeight_ - dot) / 2, dot, dot}, bitmap::kLightRed);
+            canvas.fillShadowed({frame_.x + 2 * pixel_, top + (lineHeight_ - dot) / 2, dot, dot}, bitmap::kLightRed, pixel_);
         }
         if (isExecution) {
             // A yellow arrow, over the breakpoint's dot if there is one.
             int middle = top + lineHeight_ / 2;
             int arrow = std::max(3, ui(6));
-            for (int step = 0; step <= arrow; ++step) {
-                int half = arrow - step;
-                canvas.fill({frame_.x + ui(2) + step, middle - half, 1, 2 * half + 1}, bitmap::kYellow);
+            for (int pass = 0; pass < 2; ++pass) {
+                int offset = pass == 0 ? pixel_ : 0;
+                for (int step = 0; step <= arrow; ++step) {
+                    int half = arrow - step;
+                    canvas.fill({frame_.x + ui(2) + step + offset, middle - half + offset, 1, 2 * half + 1},
+                                pass == 0 ? ui::kBlackColor : bitmap::kYellow);
+                }
             }
         }
         int severity = diagnosticSeverityForLine(line);
         if (!hasBreakpoint && !isExecution && severity > 0 && severity <= 2) {
             int dot = ui(6);
-            canvas.fill({frame_.x + ui(10), top + (lineHeight_ - dot) / 2, dot, dot}, colorForSeverity(severity));
+            canvas.fillShadowed({frame_.x + ui(10), top + (lineHeight_ - dot) / 2, dot, dot}, colorForSeverity(severity), pixel_);
         }
         // Fold arrows: always for folded blocks, for the rest while the pointer is over the numbers.
         bool folded = folds_.isFoldHeader(line);
@@ -877,8 +882,12 @@ void EditorView::drawGutter(ui::Canvas& canvas, size_t first, size_t last) {
                 continue;
             }
             int size = ui(4);
-            for (int step = 0; step <= size; ++step) {
-                canvas.fill({barX - 1 + step, top - (size - step), 1, 2 * (size - step) + 1}, 0xF5666BFF);
+            for (int pass = 0; pass < 2; ++pass) {
+                int offset = pass == 0 ? pixel_ : 0;
+                for (int step = 0; step <= size; ++step) {
+                    canvas.fill({barX - 1 + step + offset, top - (size - step) + offset, 1, 2 * (size - step) + 1},
+                                pass == 0 ? ui::kBlackColor : 0xF5666BFF);
+                }
             }
             continue;
         }
@@ -886,7 +895,7 @@ void EditorView::drawGutter(ui::Canvas& canvas, size_t first, size_t last) {
             continue;
         }
         Color color = change.kind == LineChangeKind::Added ? 0x57C773FF : 0x5C9EFFFF;
-        canvas.fill({barX, top + 1, ui(3), std::max(1, bottom - top - 2)}, color);
+        canvas.fillShadowed({barX, top + 1, ui(3), std::max(1, bottom - top - 2)}, color, pixel_);
     }
     canvas.popClip();
 }
@@ -895,7 +904,7 @@ void EditorView::drawSquiggle(ui::Canvas& canvas, int left, int right, int top, 
     // A dashed line of pixels just under the text.
     int y = top + baseline_ + pixel_;
     for (int x = left; x < std::max(right, left + charWidth_ * 4 / 5); x += 3 * pixel_) {
-        canvas.fill({x, y, 2 * pixel_, pixel_}, color);
+        canvas.fillShadowed({x, y, 2 * pixel_, pixel_}, color, pixel_);
     }
 }
 
@@ -1172,10 +1181,10 @@ void EditorView::drawText(ui::Canvas& canvas, size_t first, size_t last, bool fo
                     ui::drawGlyph(canvas, *font_, character, x, y, layout.colors[byte], true);
                 }
                 if (layout.underline[byte] == 1) {
-                    canvas.fill({x, y + baseline_ + pixel_, charWidth_ * ui::Font::cells(character), pixel_}, layout.colors[byte]);
+                    canvas.fillShadowed({x, y + baseline_ + pixel_, charWidth_ * ui::Font::cells(character), pixel_}, layout.colors[byte], pixel_);
                 } else if (layout.underline[byte] == 2) {
-                    canvas.fill({x, y + baseline_ - lineHeight_ / 4, charWidth_ * ui::Font::cells(character), pixel_},
-                                layout.colors[byte]);
+                    canvas.fillShadowed({x, y + baseline_ - lineHeight_ / 4, charWidth_ * ui::Font::cells(character), pixel_},
+                                layout.colors[byte], pixel_);
                 }
             }
             byte = next;
@@ -1259,7 +1268,7 @@ void EditorView::drawText(ui::Canvas& canvas, size_t first, size_t last, bool fo
         }
         int x = originX + static_cast<int>(std::lround(xForPosition(at)));
         int y = originY + static_cast<int>(std::lround(yForPosition(at)));
-        canvas.fill({x, y + baseline_ + pixel_, charWidth_, 2 * pixel_}, ui::withOpacity(caretColor_, 0.9));
+        canvas.fillShadowed({x, y + baseline_ + pixel_, charWidth_, 2 * pixel_}, ui::withOpacity(caretColor_, 0.9), pixel_);
     }
     drawCaret(canvas, focused);
     canvas.popClip();
@@ -1356,6 +1365,12 @@ void EditorView::drawCaret(ui::Canvas& canvas, bool focused) {
             double startX = shape.fadeStart.x + originX, startY = shape.fadeStart.y + originY;
             Color caret = caretColor_;
             const std::vector<SmearFade>& fades = shape.fades;
+            std::vector<ui::Point> shadow = points;
+            for (ui::Point& point : shadow) {
+                point.x += pixel_;
+                point.y += pixel_;
+            }
+            canvas.fillConvex(shadow, [](double, double) -> Color { return ui::kBlackColor; });
             canvas.fillConvex(points, [&](double x, double y) -> Color {
                 double t = std::clamp(((x - startX) * dx + (y - startY) * dy) / length2, 0.0, 1.0);
                 double opacity = fades.empty() ? 1 : fades.back().opacity;
@@ -1367,7 +1382,7 @@ void EditorView::drawCaret(ui::Canvas& canvas, bool focused) {
                         break;
                     }
                 }
-                return ui::withOpacity(caret, opacity * 0.55);
+                return ui::withOpacity(caret, std::max(opacity, 0.85));
             });
         }
         return;
@@ -1378,7 +1393,17 @@ void EditorView::drawCaret(ui::Canvas& canvas, bool focused) {
         return;
     }
     ui::Rect caret = caretLayerRect().offset(originX, originY);
-    canvas.fill(caret, block ? ui::withOpacity(caretColor_, 0.55) : caretColor_);
+    canvas.fillShadowed(caret, caretColor_, pixel_);
+    if (block) {
+        // The character under a block cursor shows through, inverted.
+        Position cursor = vim_.cursor(*document_);
+        std::string_view line = document_->buffer().line(cursor.line);
+        if (cursor.column < line.size()) {
+            size_t index = cursor.column;
+            char32_t character = ui::decodeUtf8(line, index);
+            ui::drawGlyphPlain(canvas, *font_, character, caret.x, caret.y - pixel_, background_);
+        }
+    }
 }
 
 double EditorView::nextFrameTime() const {
