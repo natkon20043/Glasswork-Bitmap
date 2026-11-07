@@ -59,12 +59,13 @@ Set-ItemProperty -Path $appPath -Name "Path" -Value $dest
 if (-not $NoContextMenu) {
     foreach ($key in @("Directory\shell\GlassworkBitmap", "Directory\Background\shell\GlassworkBitmap", "*\shell\GlassworkBitmap")) {
         $path = "HKCU:\Software\Classes\$key"
+        # LiteralPath: "*" is a real key name here (every file type), not a wildcard.
         New-Item -Path $path -Force | Out-Null
-        Set-ItemProperty -Path $path -Name "(default)" -Value "Open with Glasswork Bitmap"
-        Set-ItemProperty -Path $path -Name "Icon" -Value "`"$target`",0"
+        Set-ItemProperty -LiteralPath $path -Name "(default)" -Value "Open with Glasswork Bitmap"
+        Set-ItemProperty -LiteralPath $path -Name "Icon" -Value "`"$target`",0"
         $argument = if ($key -like "Directory\Background*") { "%V" } else { "%1" }
         New-Item -Path "$path\command" -Force | Out-Null
-        Set-ItemProperty -Path "$path\command" -Name "(default)" -Value "`"$target`" `"$argument`""
+        Set-ItemProperty -LiteralPath "$path\command" -Name "(default)" -Value "`"$target`" `"$argument`""
     }
 }
 
