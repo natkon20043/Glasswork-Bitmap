@@ -1301,9 +1301,11 @@ bool EditorView::vimBlockCursor() const {
 
 ui::Rect EditorView::caretRect() {
     if (vimBlockCursor()) {
+        // The whole character cell, like the terminal's cursor: as tall as the caret's row band and
+        // the box around the word under it, not a pixel short of them at the top and bottom.
         Position cursor = vim_.cursor(*document_);
-        return {static_cast<int>(std::lround(xForPosition(cursor))), static_cast<int>(std::lround(yForPosition(cursor))) + 2 * pixel_ / 2,
-                charWidth_, lineHeight_ - 2 * (2 * pixel_ / 2)};
+        return {static_cast<int>(std::lround(xForPosition(cursor))), static_cast<int>(std::lround(yForPosition(cursor))),
+                charWidth_, lineHeight_};
     }
     Position caret = document_->selection.caret;
     return {static_cast<int>(std::lround(xForPosition(caret))) - 1, static_cast<int>(std::lround(yForPosition(caret))) + 3, 2,
@@ -1419,7 +1421,7 @@ void EditorView::drawCaret(ui::Canvas& canvas, bool focused) {
         if (cursor.column < line.size()) {
             size_t index = cursor.column;
             char32_t character = ui::decodeUtf8(line, index);
-            ui::drawGlyphPlain(canvas, *font_, character, caret.x, caret.y - pixel_, background_);
+            ui::drawGlyphPlain(canvas, *font_, character, caret.x, caret.y, background_);
         }
     }
 }

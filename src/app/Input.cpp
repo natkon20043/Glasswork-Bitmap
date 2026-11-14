@@ -141,6 +141,10 @@ const nlohmann::json& defaultKeybindings() {
       { "key": "ctrl+=", "command": "workbench.action.zoomIn" },
       { "key": "ctrl+-", "command": "workbench.action.zoomOut" },
       { "key": "ctrl+0", "command": "workbench.action.zoomReset" },
+      { "key": "ctrl+shift+=", "command": "workbench.action.terminal.fontZoomIn", "when": "terminalFocus" },
+      { "key": "ctrl+=", "command": "workbench.action.terminal.fontZoomIn", "when": "terminalFocus" },
+      { "key": "ctrl+-", "command": "workbench.action.terminal.fontZoomOut", "when": "terminalFocus" },
+      { "key": "ctrl+0", "command": "workbench.action.terminal.fontZoomReset", "when": "terminalFocus" },
 
       { "key": "ctrl+p", "command": "workbench.action.quickOpen", "when": "!terminalFocus" },
       { "key": "f1", "command": "workbench.action.showCommands" },

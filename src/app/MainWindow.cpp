@@ -28,7 +28,13 @@ int Shadow() { return 4 * Pixel(); }
 ui::Font& Chrome() { return Services::shared().chromeFont(); }
 const bitmap::Scheme& Colors() { return Services::shared().scheme(); }
 int Snap(double value) { return static_cast<int>(std::floor(value / Pixel())) * Pixel(); }
-int PanelWidth() { return 25 * Cell(); }
+/// The side window's narrowest width, in columns: room for its three tabs (" Files  Issues  Debug ")
+/// inside its frame.
+constexpr int kPanelMinimumColumns = 24;
+/// How many lines and columns the code window always keeps when the terminal or the side window is
+/// dragged bigger.
+constexpr int kEditorMinimumLines = 8;
+constexpr int kEditorMinimumColumns = 20;
 
 const char* const kPanelNames[] = {"Files", "Issues", "Debug"};
 
@@ -387,12 +393,21 @@ MainWindow::MainWindow(App& app, const std::string& folder, const std::vector<st
         reloadSidePanel();
         dirty_ = true;
     });
+    // The editor and the terminal chose their fonts when they were made, before the window existed
+    // and before the display's scale was known (createWindow learns it, but tells the listeners
+    // before this window's own listener is in place). Choose again now, at the real scale.
+    editor_.reloadAppearance();
+    terminal_.reloadAppearance();
 
     nlohmann::json panelOpen = Services::shared().value("panelOpen");
     panelOpen_ = panelOpen.is_boolean() ? panelOpen.get<bool>() : true;
     nlohmann::json height = Services::shared().value("terminalLines");
     if (height.is_number_integer()) {
         terminalHeight_ = std::max(6, height.get<int>()) * Line();
+    }
+    nlohmann::json columns = Services::shared().value("panelColumns");
+    if (columns.is_number_integer()) {
+        panelColumns_ = std::max(kPanelMinimumColumns, columns.get<int>());
     }
     if (!folder.empty()) {
         openFolder(folder);
@@ -540,12 +555,13 @@ MainWindow::Geometry MainWindow::geometry() const {
     int bottom = g.status.y - shadow - pixel;
     int right = width - shadow - pixel;
     if (panelOpen_) {
-        g.panelWindow = {Snap(right - PanelWidth()), top, PanelWidth(), std::max(0, bottom - top)};
+        int panelWidth = std::clamp(panelColumns_, kPanelMinimumColumns, maximumPanelColumns()) * cell;
+        g.panelWindow = {Snap(right - panelWidth), top, panelWidth, std::max(0, bottom - top)};
         g.panelContent = {g.panelWindow.x + cell, top + line, g.panelWindow.w - 2 * cell, std::max(0, g.panelWindow.h - 2 * line)};
         right = g.panelWindow.x - shadow - 2 * pixel;
     }
     if (terminalVisible_) {
-        int terminal = Snap(std::min<double>(terminalHeight_, std::max(0, bottom - top - 8 * line)));
+        int terminal = Snap(std::min<double>(terminalHeight_, std::max(0, bottom - top - kEditorMinimumLines * line)));
         g.terminalWindow = {2 * pixel, bottom - terminal, std::max(0, right - 2 * pixel), terminal};
         g.terminalContent = {g.terminalWindow.x + cell, g.terminalWindow.y + line, std::max(0, g.terminalWindow.w - 2 * cell),
                              std::max(0, terminal - 2 * line)};
@@ -598,6 +614,29 @@ std::string MainWindow::modeLabel() const {
 
 int MainWindow::modeLeft(const ui::Rect& window) const {
     return Snap(window.right() - 3 * Cell() - ui::textWidth(Chrome(), modeLabel()));
+}
+
+int MainWindow::maximumPanelColumns() const {
+    // As wide as leaves the code window its columns.
+    int room = canvas_.width() - Shadow() - Pixel() - Shadow() - 4 * Pixel() - kEditorMinimumColumns * Cell();
+    return std::max(kPanelMinimumColumns, room / Cell());
+}
+
+bool MainWindow::onTerminalEdge(const Geometry& g, int x, int y) const {
+    // The terminal window's title line, and the gap between it and the code window above.
+    if (!terminalVisible_ || x < g.terminalWindow.x || x >= g.terminalWindow.right()) {
+        return false;
+    }
+    return y >= g.editorWindow.bottom() && y < g.terminalWindow.y + Line();
+}
+
+bool MainWindow::onPanelEdge(const Geometry& g, int x, int y) const {
+    // The gap between the code (and terminal) windows and the side window, and the side window's
+    // own left border.
+    if (!panelOpen_ || y < g.panelWindow.y || y >= g.panelWindow.bottom()) {
+        return false;
+    }
+    return x >= g.editorWindow.right() && x < g.panelWindow.x + Cell();
 }
 
 void MainWindow::layout() {
@@ -1455,6 +1494,9 @@ void MainWindow::mouseButton(const SDL_MouseButtonEvent& event, bool down) {
             case Capture::TerminalEdge:
                 Services::shared().setValue("terminalLines", terminalHeight_ / Line());
                 break;
+            case Capture::PanelEdge:
+                Services::shared().setValue("panelColumns", panelColumns_);
+                break;
             default: break;
         }
         return;
@@ -1575,9 +1617,14 @@ bool MainWindow::chromeMouseDown(const MouseEvent& mouse) {
             }
         }
     }
-    if (terminalVisible_ && mouse.y >= g.terminalWindow.y && mouse.y < g.terminalWindow.y + Line() && mouse.x >= g.terminalWindow.x &&
-        mouse.x < g.terminalWindow.right()) {
+    if (onTerminalEdge(g, mouse.x, mouse.y)) {
         capture_ = Capture::TerminalEdge;
+        edgeGrab_ = mouse.y - g.terminalWindow.y;
+        return true;
+    }
+    if (onPanelEdge(g, mouse.x, mouse.y)) {
+        capture_ = Capture::PanelEdge;
+        edgeGrab_ = mouse.x - g.panelWindow.x;
         return true;
     }
     if (currentTab() && currentTab()->kind == Tab::Kind::Text) {
@@ -1669,10 +1716,25 @@ void MainWindow::mouseMotion(const SDL_MouseMotionEvent& event) {
             dirty_ = true;
             return;
         case Capture::TerminalEdge: {
+            // The terminal's top edge follows the pointer (where it was grabbed), between five lines
+            // tall and as tall as leaves the code window its few lines.
             int bottom = g.status.y - Shadow() - Pixel();
-            int wanted = Snap(bottom - mouse.y);
-            terminalHeight_ = std::max(5 * Line(), wanted);
+            int top = g.menuBar.bottom() + 2 * Pixel();
+            int tallest = std::max(5 * Line(), bottom - top - kEditorMinimumLines * Line());
+            int wanted = Snap(bottom - (mouse.y - edgeGrab_));
+            terminalHeight_ = std::clamp(wanted, 5 * Line(), tallest);
             layout();
+            return;
+        }
+        case Capture::PanelEdge: {
+            // The side window's left edge follows the pointer, a column at a time.
+            int right = g.menuBar.right() - Shadow() - Pixel();
+            int wanted = (right - (mouse.x - edgeGrab_)) / Cell();
+            int columns = std::clamp(wanted, kPanelMinimumColumns, std::max(kPanelMinimumColumns, maximumPanelColumns()));
+            if (columns != panelColumns_) {
+                panelColumns_ = columns;
+                layout();
+            }
             return;
         }
         case Capture::Scrollbar:
@@ -1716,6 +1778,7 @@ void MainWindow::mouseMotion(const SDL_MouseMotionEvent& event) {
     static SDL_Cursor* arrow = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_DEFAULT);
     static SDL_Cursor* text = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_TEXT);
     static SDL_Cursor* resize = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_NS_RESIZE);
+    static SDL_Cursor* resizeSideways = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_EW_RESIZE);
     SDL_Cursor* wanted = arrow;
     Tab* tab = currentTab();
     if (tab && tab->kind == Tab::Kind::Text && g.editorContent.contains(mouse.x, mouse.y) &&
@@ -1723,9 +1786,10 @@ void MainWindow::mouseMotion(const SDL_MouseMotionEvent& event) {
         wanted = text;
     } else if (terminalVisible_ && g.terminalContent.contains(mouse.x, mouse.y)) {
         wanted = text;
-    } else if (terminalVisible_ && mouse.y >= g.terminalWindow.y && mouse.y < g.terminalWindow.y + Line() &&
-               mouse.x >= g.terminalWindow.x && mouse.x < g.terminalWindow.right()) {
+    } else if (onTerminalEdge(g, mouse.x, mouse.y)) {
         wanted = resize;
+    } else if (onPanelEdge(g, mouse.x, mouse.y)) {
+        wanted = resizeSideways;
     }
     if (SDL_GetCursor() != wanted) {
         SDL_SetCursor(wanted);
@@ -1755,11 +1819,16 @@ void MainWindow::mouseWheel(const SDL_MouseWheelEvent& event) {
         return;
     }
     hover_.hide();
+    Geometry g = geometry();
     if (wheel.control && wheel.dy != 0) {
-        zoom(wheel.dy > 0 ? 1 : -1);
+        // Over the terminal, its own text; anywhere else, the code's.
+        if (terminalVisible_ && g.terminalWindow.contains(wheel.x, wheel.y)) {
+            zoomTerminal(wheel.dy > 0 ? 1 : -1);
+        } else {
+            zoom(wheel.dy > 0 ? 1 : -1);
+        }
         return;
     }
-    Geometry g = geometry();
     Tab* tab = currentTab();
     if (g.editorWindow.contains(wheel.x, wheel.y) && tab) {
         if (tab->kind == Tab::Kind::Preview) {
@@ -1868,6 +1937,30 @@ void MainWindow::runScriptStep() {
             event.clicks = verb == "doubleclick" ? 2 : 1;
             mouseButton(event, true);
             mouseButton(event, false);
+        } else if (verb == "drag") {
+            // drag x1 y1 x2 y2: press at one point, move to the other, let go there.
+            int coordinates[4] = {0, 0, 0, 0};
+            size_t at = 0;
+            for (int& value : coordinates) {
+                value = std::atoi(rest.c_str() + std::min(rest.size(), at));
+                at = rest.find(' ', at);
+                at = at == std::string::npos ? rest.size() : at + 1;
+            }
+            SDL_MouseButtonEvent press = {};
+            press.x = static_cast<float>(coordinates[0] / pixelDensity_);
+            press.y = static_cast<float>(coordinates[1] / pixelDensity_);
+            press.button = SDL_BUTTON_LEFT;
+            press.clicks = 1;
+            mouseButton(press, true);
+            SDL_MouseMotionEvent motion = {};
+            motion.x = static_cast<float>(coordinates[2] / pixelDensity_);
+            motion.y = static_cast<float>(coordinates[3] / pixelDensity_);
+            motion.state = SDL_BUTTON_LMASK;
+            mouseMotion(motion);
+            SDL_MouseButtonEvent release = press;
+            release.x = motion.x;
+            release.y = motion.y;
+            mouseButton(release, false);
         } else if (verb == "command") {
             runCommand(rest);
         } else if (verb == "open") {

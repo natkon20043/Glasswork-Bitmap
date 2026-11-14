@@ -263,7 +263,7 @@ std::string serializeSettings(const EditorSettings& settings, const json& otherS
         << ",  // run the language server's formatter when you press Ctrl+S\n"
         << "\n"
         << "  // Terminal\n"
-        << "  \"terminal.fontSize\": " << settings.terminalFontSize << ",  // 0 = the editor's size\n"
+        << "  \"terminal.fontSize\": " << settings.terminalFontSize << ",  // 0 = the editor's size; Ctrl+= and Ctrl+- in the terminal change it alone\n"
         << "  \"terminal.shell\": " << json(settings.terminalShell).dump()
         << ",  // empty = PowerShell on Windows, your login shell on Linux\n"
         << "\n"

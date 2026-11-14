@@ -149,6 +149,12 @@ private:
     std::string positionLabel() const;
     std::string modeLabel() const;
     int modeLeft(const ui::Rect& window) const;
+    /// The side window's widest, in columns, for the window's present width.
+    int maximumPanelColumns() const;
+    /// Whether a point is on the edge that resizes the terminal (its title line and the gap above
+    /// it) or the side window (its left border and the gap beside it).
+    bool onTerminalEdge(const Geometry& g, int x, int y) const;
+    bool onPanelEdge(const Geometry& g, int x, int y) const;
     void keyEvent(const SDL_KeyboardEvent& event, bool down);
     void textEvent(const std::string& text);
     void mouseButton(const SDL_MouseButtonEvent& event, bool down);
@@ -182,7 +188,10 @@ private:
     void showKeys();
     void showAbout();
     void chooseFont();
+    /// The code's text size: bigger, smaller, or (0) back to the usual size.
     void zoom(int steps);
+    /// The terminal's own text size: bigger, smaller, or (0) the same as the code's again.
+    void zoomTerminal(int steps);
 
     // ---- MainWindowFiles.cpp: tabs, files, folders, sessions
     Tab* currentTab() const;
@@ -344,6 +353,7 @@ private:
     std::unique_ptr<DebugPanel> debugPanel_;
     SidePanel panel_ = SidePanel::Files;
     bool panelOpen_ = true;
+    int panelColumns_ = 25;
     std::string listedFolder_;
     std::string listedFile_;
 
@@ -364,11 +374,12 @@ private:
     std::map<std::string, std::string> extensionContext_;
 
     // Mouse.
-    enum class Capture { None, Editor, Terminal, Panel, Overlay, Scrollbar, TerminalEdge };
+    enum class Capture { None, Editor, Terminal, Panel, Overlay, Scrollbar, TerminalEdge, PanelEdge };
     Capture capture_ = Capture::None;
     bool scrollVertical_ = true;
     bool draggingThumb_ = false;
     int thumbGrab_ = 0;
+    int edgeGrab_ = 0;  // where on the terminal's or side window's edge the drag took hold
     double scrollStep_ = 0;
     uint64_t scrollTimer_ = 0;
     int mouseX_ = 0;

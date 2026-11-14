@@ -62,6 +62,13 @@ public:
     std::shared_ptr<ui::Font> terminalFont();
     /// Whether the code is drawn in the built-in pixel font.
     bool usesPixelFont() const { return saved_.bitmapFont.empty() || !customFontAvailable_; }
+    /// Device pixels per font pixel of the built-in pixel font at a text size, on this display.
+    int pixelFontPixel(double fontSize) const;
+    /// A text size `steps` sizes bigger (or smaller, when negative) than `size`, kept within
+    /// [low, high]. A chosen font grows a point at a time; the pixel font only looks different at
+    /// whole device pixels, so each step goes on to the next size that is really bigger or smaller.
+    /// `size` itself when there is no such size within the limits.
+    double steppedTextSize(double size, int steps, double low, double high) const;
 
     // ---- Extensions
     ExtensionManager& extensions() { return *extensions_; }

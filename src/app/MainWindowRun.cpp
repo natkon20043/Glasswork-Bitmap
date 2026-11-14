@@ -236,8 +236,16 @@ void MainWindow::startDebugging() {
     if (tab && tab->kind == Tab::Kind::Text && !tab->path().empty()) {
         std::string extension = utf8FromPath(pathFromUtf8(tab->path()).extension());
         const std::string& language = tab->document->languageId;
-        if ((language == "c" && extension == ".c") || (language == "cpp" && (extension == ".cpp" || extension == ".cc" || extension == ".cxx"))) {
+        if ((language == "c" && extension == ".c") || (language == "cpp" && (extension == ".cpp" || extension == ".cc" || extension == ".cxx")) ||
+            (language == "rust" && extension == ".rs")) {
             debugCurrentFile();
+            return;
+        }
+        // Scripts (Python, JavaScript, TypeScript...) have no debugger here: F5 runs them in the
+        // terminal, as Run > Run File does, rather than asking for a program to debug.
+        ShellKind kind = shellKindOf(Services::shared().settings().terminalShell);
+        if (!commandToRunFile(pathFromUtf8(tab->path()), language, kind).empty()) {
+            runCurrentFile();
             return;
         }
     }
@@ -249,46 +257,80 @@ void MainWindow::debugCurrentFile() {
     std::string extension = tab && !tab->path().empty() ? utf8FromPath(pathFromUtf8(tab->path()).extension()) : std::string();
     bool isC = tab && tab->document && tab->document->languageId == "c" && extension == ".c";
     bool isCpp = tab && tab->document && tab->document->languageId == "cpp" && (extension == ".cpp" || extension == ".cc" || extension == ".cxx");
-    if (!isC && !isCpp) {
-        showError("Can't debug this file", "Glasswork Bitmap can build a single C or C++ file for debugging. For other projects, build "
-                                           "them first and use Debug > Debug Executable.");
+    bool isRust = tab && tab->document && tab->document->languageId == "rust" && extension == ".rs";
+    if (!isC && !isCpp && !isRust) {
+        showError("Can't debug this file", "Glasswork Bitmap can build a single C, C++ or Rust file, or the Cargo program a Rust file "
+                                           "belongs to, for debugging. For other projects, build them first and use Debug > Debug "
+                                           "Executable.");
         return;
     }
-    saveAllQuietly();
-    openSidePanel(SidePanel::Debug);
-    debugPanel_->clearConsole();
-    std::string compiler = isCpp ? (!findExecutable("clang++").empty() ? "clang++" : "g++") : (!findExecutable("clang").empty() ? "clang" : "gcc");
-    std::string compilerPath = findExecutable(compiler);
-    if (compilerPath.empty()) {
-        showError("No compiler found", "Install a C/C++ compiler (MSYS2's mingw-w64 GCC, or LLVM) and make sure it is on the PATH.");
-        return;
-    }
+    std::string source = tab->path();
     std::error_code error;
     fs::path output = fs::temp_directory_path(error) / ("glasswork-debug-" + std::to_string(currentProcessId()));
 #ifdef _WIN32
     output += ".exe";
 #endif
-    std::vector<std::string> command = {compilerPath};
-    if (isCpp) {
-        command.push_back("-std=c++20");
+    std::vector<std::string> command;
+    // A Rust file in a Cargo package is built by Cargo, which says (in JSON) where the program went.
+    bool cargo = false;
+    if (isRust) {
+        fs::path manifest = cargoManifestFor(pathFromUtf8(source));
+        if (!manifest.empty()) {
+            std::string cargoPath = findExecutable("cargo");
+            if (cargoPath.empty()) {
+                showError("Cargo wasn't found", "Install Rust (with Cargo) and make sure cargo is on the PATH.");
+                return;
+            }
+            cargo = true;
+            command = {cargoPath, "build", "--manifest-path", utf8FromPath(manifest), "--message-format=json-render-diagnostics"};
+            std::vector<std::string> target = cargoTargetArguments(pathFromUtf8(source), manifest);
+            command.insert(command.end(), target.begin(), target.end());
+        } else {
+            std::string rustc = findExecutable("rustc");
+            if (rustc.empty()) {
+                showError("No Rust compiler found", "Install Rust and make sure rustc is on the PATH.");
+                return;
+            }
+            command = {rustc, "-g", "-C", "opt-level=0", source, "-o", utf8FromPath(output)};
+        }
+    } else {
+        std::string compiler = isCpp ? (!findExecutable("clang++").empty() ? "clang++" : "g++") : (!findExecutable("clang").empty() ? "clang" : "gcc");
+        std::string compilerPath = findExecutable(compiler);
+        if (compilerPath.empty()) {
+            showError("No compiler found", "Install a C/C++ compiler (MSYS2's mingw-w64 GCC, or LLVM) and make sure it is on the PATH.");
+            return;
+        }
+        command = {compilerPath};
+        if (isCpp) {
+            command.push_back("-std=c++20");
+        }
+        command.insert(command.end(), {"-g", "-O0", "-Wall", source, "-o", utf8FromPath(output)});
     }
-    std::string source = tab->path();
-    command.insert(command.end(), {"-g", "-O0", "-Wall", source, "-o", utf8FromPath(output)});
+    saveAllQuietly();
+    openSidePanel(SidePanel::Debug);
+    debugPanel_->clearConsole();
     debugPanel_->appendConsole("Building " + utf8FromPath(pathFromUtf8(source).filename()) + "...\n", "console");
     std::weak_ptr<bool> alive = alive_;
-    std::string program = utf8FromPath(output);
-    runInBackground([this, alive, command, program] {
+    std::string built = utf8FromPath(output);
+    runInBackground([this, alive, command, built, cargo, source] {
         auto result = std::make_shared<ProcessResult>(runProcess(command));
-        runOnMain([this, alive, result, program] {
+        runOnMain([this, alive, result, built, cargo, source] {
             if (alive.expired()) {
                 return;
             }
-            std::string messages = result->output + result->errorOutput + result->startError;
+            // Cargo's standard output is its JSON; the messages meant for people are on standard error.
+            std::string messages = (cargo ? std::string() : result->output) + result->errorOutput + result->startError;
             if (!messages.empty()) {
                 debugPanel_->appendConsole(messages + (messages.back() == '\n' ? "" : "\n"), result->succeeded() ? "console" : "stderr");
             }
             if (!result->succeeded()) {
                 showError("The build failed", "The compiler's messages are in the debugger's console.");
+                return;
+            }
+            std::string program = cargo ? cargoExecutableFor(result->output, pathFromUtf8(source)) : built;
+            if (program.empty()) {
+                showError("Which program?", "Cargo built several programs and none of them starts in this file. Open the file with "
+                                            "its main function, or use Debug > Debug Executable.");
                 return;
             }
             launchDebugProgram(program, {});

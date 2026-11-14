@@ -418,16 +418,34 @@ void TerminalPanel::draw(ui::Canvas& canvas, bool focused) {
     int pixel = Pixel(), cell = Cell();
     canvas.pushClip(frame_);
     canvas.fill(frame_, colors.window);
-    // The tab strip: a tab per terminal, then [+] [x] [v] at the right.
+    // The tab strip: a tab per terminal, then [+] [x] [v] at the right. The buttons are placed
+    // first, so the tabs know how much room they have and never run under them.
     stripButtons_.clear();
     ui::Rect strip = stripRect();
+    const char* labels[3] = {"[+]", "[x]", "[v]"};
+    int right = strip.right();
+    for (int button = 2; button >= 0; --button) {
+        int width = ui::textWidth(Chrome(), labels[button]);
+        right -= width + (button < 2 ? cell / 2 : 0);
+        ui::drawText(canvas, Chrome(), right, strip.y, labels[button], colors.text, true);
+        stripButtons_.push_back({{right, strip.y, width, strip.h}, -(button + 1)});
+    }
+    int tabsRight = std::max(strip.x, right - cell);
+    // Each tab gets an equal share of the room, at most 24 columns, its title shortened to fit.
+    int count = std::max<int>(1, static_cast<int>(sessions_.size()));
+    int share = std::clamp((tabsRight - strip.x) / std::max(1, cell) / count - 1, 6, 24);
+    canvas.pushClip({strip.x, strip.y, tabsRight - strip.x, strip.h});
     int x = strip.x;
-    for (size_t index = 0; index < sessions_.size(); ++index) {
+    for (size_t index = 0; index < sessions_.size() && x < tabsRight; ++index) {
         std::string label = " " + std::to_string(index + 1) + ": " + sessions_[index]->title() + " ";
-        if (ui::textCells(label) > 24) {
-            label = label.substr(0, 22) + "… ";
+        if (ui::textCells(label) > share) {
+            size_t keep = static_cast<size_t>(share - 2);
+            while (keep > 0 && keep < label.size() && (static_cast<unsigned char>(label[keep]) & 0xC0) == 0x80) {
+                --keep;  // not in the middle of a character
+            }
+            label = label.substr(0, keep) + "… ";
         }
-        int width = ui::textWidth(Chrome(), label);
+        int width = std::min(ui::textWidth(Chrome(), label), tabsRight - x);
         bool selected = index == selected_;
         if (selected) {
             canvas.fill({x, strip.y, width, strip.h}, colors.selection);
@@ -440,14 +458,7 @@ void TerminalPanel::draw(ui::Canvas& canvas, bool focused) {
         stripButtons_.push_back({{x, strip.y, width, strip.h}, static_cast<int>(index)});
         x += width + cell / 2;
     }
-    const char* labels[3] = {"[+]", "[x]", "[v]"};
-    int right = strip.right();
-    for (int button = 2; button >= 0; --button) {
-        int width = ui::textWidth(Chrome(), labels[button]);
-        right -= width + (button < 2 ? cell / 2 : 0);
-        ui::drawText(canvas, Chrome(), right, strip.y, labels[button], colors.text, true);
-        stripButtons_.push_back({{right, strip.y, width, strip.h}, -(button + 1)});
-    }
+    canvas.popClip();
     canvas.fillShadowed({strip.x, strip.bottom(), strip.w, pixel}, colors.frameDim, std::max(1, font_->pixel()));
 
     TerminalSession* session = current();

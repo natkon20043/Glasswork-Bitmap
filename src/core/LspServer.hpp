@@ -64,9 +64,12 @@ std::string resolveProgram(const std::string& program);
 
 /// Where typescript-language-server should find TypeScript's own server (tsserver.js), which it
 /// needs and TypeScript 7 no longer ships: the `typescript` package installed beside the server,
-/// else the copy kept in the `support` folder (see the install hint). Empty when
-/// the project has its own TypeScript, which the server finds and prefers, or when none is found.
-std::string findTypeScriptServer(const std::string& serverProgram, const std::string& projectFolder, const std::string& support);
+/// else the copy kept in the `support` folder (see the install hint), else the TypeScript that
+/// `tsserverProgram` (the `tsserver` program on the PATH, if any) belongs to, as when the server and
+/// TypeScript are separate packages (Nix, Homebrew). Empty when the project has its own TypeScript,
+/// which the server finds and prefers, or when none is found.
+std::string findTypeScriptServer(const std::string& serverProgram, const std::string& projectFolder, const std::string& support,
+                                 const std::string& tsserverProgram = std::string());
 
 std::vector<Diagnostic> parseDiagnostics(const Json& array);
 

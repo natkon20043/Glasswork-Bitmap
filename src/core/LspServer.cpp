@@ -102,7 +102,36 @@ std::string resolveProgram(const std::string& program) {
     return std::string();
 }
 
-std::string findTypeScriptServer(const std::string& serverProgram, const std::string& projectFolder, const std::string& support) {
+namespace {
+
+/// The tsserver.js of the TypeScript package a `tsserver` program belongs to: either a link into the
+/// package (npm's <prefix>/bin/tsserver -> ../lib/node_modules/typescript/bin/tsserver), or a
+/// program beside the package's folder (<prefix>/bin and <prefix>/lib/node_modules/typescript).
+std::string typeScriptServerOfProgram(const std::string& program) {
+    namespace fs = std::filesystem;
+    if (program.empty()) {
+        return std::string();
+    }
+    std::error_code problem;
+    fs::path given = pathFromUtf8(program);
+    fs::path real = fs::weakly_canonical(given, problem);
+    if (!problem) {
+        fs::path inPackage = real.parent_path().parent_path() / "lib" / "tsserver.js";
+        if (real.parent_path().filename() == "bin" && fs::exists(inPackage, problem)) {
+            return utf8FromPath(inPackage);
+        }
+    }
+    fs::path besidePrefix = given.parent_path().parent_path() / "lib" / "node_modules" / "typescript" / "lib" / "tsserver.js";
+    if (fs::exists(besidePrefix, problem)) {
+        return utf8FromPath(besidePrefix);
+    }
+    return std::string();
+}
+
+}  // namespace
+
+std::string findTypeScriptServer(const std::string& serverProgram, const std::string& projectFolder, const std::string& support,
+                                 const std::string& tsserverProgram) {
     namespace fs = std::filesystem;
     std::error_code problem;
     if (fs::exists(fs::path(projectFolder) / "node_modules" / "typescript" / "lib" / "tsserver.js", problem)) {
@@ -134,10 +163,10 @@ std::string findTypeScriptServer(const std::string& serverProgram, const std::st
         }
     }
     fs::path kept = pathFromUtf8(support) / "typescript" / "node_modules" / "typescript" / "lib" / "tsserver.js";
-    if (support.empty() || !fs::exists(kept, problem)) {
-        return std::string();
+    if (!support.empty() && fs::exists(kept, problem)) {
+        return utf8FromPath(kept);
     }
-    return utf8FromPath(kept);
+    return typeScriptServerOfProgram(tsserverProgram);
 }
 
 std::vector<Diagnostic> parseDiagnostics(const Json& array) {
@@ -348,7 +377,8 @@ bool LanguageServer::start(std::string* error) {
     if (spec_.name == "typescript-language-server" && !spec_.command.empty()) {
         // It looks for TypeScript in the project, and a global install sits somewhere else; without
         // this it refuses to start ("Could not find a valid TypeScript installation").
-        std::string tsserver = findTypeScriptServer(resolveProgram(spec_.command[0]), rootPath_, utf8FromPath(supportFolder()));
+        std::string tsserver = findTypeScriptServer(resolveProgram(spec_.command[0]), rootPath_, utf8FromPath(supportFolder()),
+                                                    resolveProgram("tsserver"));
         if (!tsserver.empty()) {
             initialize["params"]["initializationOptions"] = {{"tsserver", {{"path", tsserver}}}};
         }

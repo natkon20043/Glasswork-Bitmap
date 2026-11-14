@@ -269,8 +269,10 @@ void Services::setDisplayScale(double scale) {
 }
 
 int Services::chromePixel() const {
-    // 2 at 100%, 3 at 150%, 4 at 200%: always whole device pixels.
-    return std::max(2, static_cast<int>(std::floor(2 * displayScale_ + 0.25)));
+    // 2 at 100%, 3 at 125% and 150%, 4 at 175% and 200%: always whole device pixels, rounded the
+    // same way as the code's own pixel font (editorFont), so the menus, tabs and status line are
+    // the same size as the text in the code window at the default text size.
+    return std::max(2, static_cast<int>(std::lround(2 * displayScale_)));
 }
 
 ui::Font& Services::chromeFont() {
@@ -287,8 +289,30 @@ std::shared_ptr<ui::Font> Services::editorFont() {
         }
     }
     customFontAvailable_ = !saved_.bitmapFont.empty() ? false : true;
-    int pixel = std::max(1, static_cast<int>(std::lround(bitmap::pixelSize(saved_.fontSize) * displayScale_)));
-    return ui::pixelFont(pixel);
+    return ui::pixelFont(pixelFontPixel(saved_.fontSize));
+}
+
+int Services::pixelFontPixel(double fontSize) const {
+    return std::max(1, static_cast<int>(std::lround(bitmap::pixelSize(fontSize) * displayScale_)));
+}
+
+double Services::steppedTextSize(double size, int steps, double low, double high) const {
+    double result = std::clamp(size, low, high);
+    int direction = steps > 0 ? 1 : -1;
+    for (int step = 0; step < std::abs(steps); ++step) {
+        double candidate = result + direction;
+        if (usesPixelFont()) {
+            int now = pixelFontPixel(result);
+            while (candidate >= low && candidate <= high && pixelFontPixel(candidate) == now) {
+                candidate += direction;
+            }
+        }
+        if (candidate < low || candidate > high) {
+            break;  // already the biggest (or smallest) size there is
+        }
+        result = candidate;
+    }
+    return result;
 }
 
 std::shared_ptr<ui::Font> Services::terminalFont() {
@@ -301,8 +325,7 @@ std::shared_ptr<ui::Font> Services::terminalFont() {
             return font;
         }
     }
-    int pixel = std::max(1, static_cast<int>(std::lround(bitmap::pixelSize(saved_.terminalFontSize) * displayScale_)));
-    return ui::pixelFont(pixel);
+    return ui::pixelFont(pixelFontPixel(saved_.terminalFontSize));
 }
 
 // ---------------------------------------------------------------------------

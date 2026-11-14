@@ -32,6 +32,7 @@ const std::set<std::string>& commandsSkippingShell() {
         "workbench.action.debug.stepInto",     "workbench.action.debug.stepOut",   "workbench.action.nextEditor",
         "workbench.action.previousEditor",     "workbench.action.zoomIn",          "workbench.action.zoomOut",
         "workbench.action.zoomReset",          "workbench.view.explorer",          "workbench.view.debug",
+        "workbench.action.terminal.fontZoomIn", "workbench.action.terminal.fontZoomOut", "workbench.action.terminal.fontZoomReset",
         "workbench.actions.view.problems",     "workbench.action.tasks.build",     "workbench.action.tasks.runTask",
         "glasswork.runCurrentFile",            "workbench.action.openSettings",    "workbench.action.files.openFolder",
         "workbench.extensions.search",         "workbench.action.files.openFile",  "glasswork.openFolderInNewWindow",
@@ -263,9 +264,10 @@ void MainWindow::registerCommands() {
     addCommand("workbench.action.toggleSidebarVisibility", "View: Toggle Side Window", [this] { toggleSidePanel(); });
     addCommand("workbench.action.zoomIn", "View: Bigger Text", [this] { zoom(1); });
     addCommand("workbench.action.zoomOut", "View: Smaller Text", [this] { zoom(-1); });
-    addCommand("workbench.action.zoomReset", "View: Reset Text Size", [] {
-        Services::shared().updateSettings([](EditorSettings& settings) { settings.fontSize = 13; });
-    });
+    addCommand("workbench.action.zoomReset", "View: Reset Text Size", [this] { zoom(0); });
+    addCommand("workbench.action.terminal.fontZoomIn", "Terminal: Bigger Text", [this] { zoomTerminal(1); });
+    addCommand("workbench.action.terminal.fontZoomOut", "Terminal: Smaller Text", [this] { zoomTerminal(-1); });
+    addCommand("workbench.action.terminal.fontZoomReset", "Terminal: Reset Text Size (Same as the Code)", [this] { zoomTerminal(0); });
     addCommand("workbench.action.showCommands", "Show All Commands", [this] { showCommandPalette(); });
     addCommand("glasswork.openMenuBar", "View: Open Menu Bar", [this] { openMenu(1); });
     addCommand("glasswork.showKeys", "Help: Keys", [this] { showKeys(); });
@@ -546,7 +548,8 @@ std::vector<Menu> MainWindow::buildMenus() {
     menus.push_back({"&View",
                      {item("&Files", "workbench.view.explorer"), item("&Issues", "workbench.actions.view.problems"),
                       item("&Debugger", "workbench.view.debug"), side, line, item("&Bigger Text", "workbench.action.zoomIn"),
-                      item("S&maller Text", "workbench.action.zoomOut"), wrap}});
+                      item("S&maller Text", "workbench.action.zoomOut"), item("Bigger &Terminal Text", "workbench.action.terminal.fontZoomIn"),
+                      item("Smaller Termi&nal Text", "workbench.action.terminal.fontZoomOut"), wrap}});
     menus.push_back({"&Options", optionsItems()});
     menus.push_back({"&Help", {item("&Keys", "glasswork.showKeys"), item("&Commands...", "workbench.action.showCommands"),
                                item("&About", "glasswork.about")}});
@@ -759,10 +762,40 @@ void MainWindow::chooseFont() {
 }
 
 void MainWindow::zoom(int steps) {
-    Services::shared().updateSettings([steps](EditorSettings& settings) {
-        settings.fontSize = std::clamp(settings.fontSize + steps, 6.0, 48.0);
-    });
-    setStatusMessage("Text size " + std::to_string(static_cast<int>(Services::shared().settings().fontSize)), 2);
+    // The code's text only: the terminal has its own size (zoomTerminal), unless it is set to follow
+    // the code's ("terminal.fontSize": 0).
+    Services& services = Services::shared();
+    double before = services.settings().fontSize;
+    double size = steps == 0 ? 13.0 : services.steppedTextSize(before, steps, 6, 48);
+    if (size == before) {
+        setStatusMessage(steps == 0 ? "The text is already its usual size"
+                                    : steps > 0 ? "The text is already its biggest" : "The text is already its smallest",
+                         2);
+        return;
+    }
+    services.updateSettings([size](EditorSettings& settings) { settings.fontSize = size; });
+    setStatusMessage("Text size " + std::to_string(static_cast<int>(std::lround(size))), 2);
+}
+
+void MainWindow::zoomTerminal(int steps) {
+    Services& services = Services::shared();
+    const EditorSettings& settings = services.settings();
+    double before = settings.terminalFontSize;
+    double size = 0;  // 0: the same size as the code's text
+    if (steps != 0) {
+        double current = before > 0 ? before : settings.fontSize;
+        size = services.steppedTextSize(current, steps, 8, 40);
+        if (size == current) {
+            setStatusMessage(steps > 0 ? "The terminal's text is already its biggest" : "The terminal's text is already its smallest", 2);
+            return;
+        }
+    }
+    if (size != before) {
+        services.updateSettings([size](EditorSettings& changed) { changed.terminalFontSize = size; });
+    }
+    setStatusMessage(size > 0 ? "Terminal text size " + std::to_string(static_cast<int>(std::lround(size)))
+                              : std::string("Terminal text is the same size as the code"),
+                     2);
 }
 
 }  // namespace gw::app

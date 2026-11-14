@@ -66,7 +66,16 @@ std::vector<std::string> extraSearchFolders() {
         folders.push_back(homeFolder + "/bin");
         folders.push_back(homeFolder + "/.volta/bin");
         folders.push_back(homeFolder + "/.npm-global/bin");
+        // Nix: the user's profiles (nix-env, nix profile, home-manager).
+        folders.push_back(homeFolder + "/.nix-profile/bin");
+        folders.push_back(homeFolder + "/.local/state/nix/profile/bin");
     }
+    // NixOS: the user's and the system's packages (users.users.<name>.packages, environment.systemPackages).
+    if (const char* user = std::getenv("USER"); user != nullptr && *user != '\0') {
+        folders.push_back(std::string("/etc/profiles/per-user/") + user + "/bin");
+    }
+    folders.push_back("/nix/var/nix/profiles/default/bin");
+    folders.push_back("/run/current-system/sw/bin");
     std::string nvmFolder = newestNvmBinFolder();
     if (!nvmFolder.empty()) {
         folders.push_back(nvmFolder);

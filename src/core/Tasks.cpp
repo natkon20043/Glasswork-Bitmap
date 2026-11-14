@@ -264,6 +264,106 @@ std::string cCompiler(bool cplusplus) {
     return "gcc";
 }
 
+std::filesystem::path cargoManifestFor(const std::filesystem::path& file) {
+    std::error_code error;
+    std::filesystem::path folder = std::filesystem::absolute(file, error).parent_path();
+    while (!folder.empty()) {
+        if (pathExists(folder / "Cargo.toml")) {
+            return folder / "Cargo.toml";
+        }
+        if (!folder.has_relative_path() || folder == folder.parent_path()) {
+            break;
+        }
+        folder = folder.parent_path();
+    }
+    return std::filesystem::path();
+}
+
+namespace {
+
+/// The `name` in a Cargo.toml's [package] table; empty when there is none.
+std::string cargoPackageName(const std::filesystem::path& manifest) {
+    std::istringstream lines(readFile(manifest));
+    std::string line;
+    bool inPackage = false;
+    static const std::regex table(R"(^\s*\[\[?\s*([^\]]*?)\s*\]\]?\s*(#.*)?$)");  // [table] or [[array]]
+    static const std::regex name(R"(^\s*name\s*=\s*["']([^"']+)["']\s*(#.*)?$)");
+    while (std::getline(lines, line)) {
+        if (!line.empty() && line.back() == '\r') {
+            line.pop_back();
+        }
+        std::smatch match;
+        if (std::regex_match(line, match, table)) {
+            inPackage = match[1] == "package";
+        } else if (inPackage && std::regex_match(line, match, name)) {
+            return match[1];
+        }
+    }
+    return std::string();
+}
+
+}  // namespace
+
+std::vector<std::string> cargoTargetArguments(const std::filesystem::path& file, const std::filesystem::path& manifest) {
+    std::error_code error;
+    std::filesystem::path relative = std::filesystem::absolute(file, error).lexically_relative(manifest.parent_path());
+    std::vector<std::string> parts;
+    for (const auto& part : relative) {
+        parts.push_back(utf8FromPath(part));
+    }
+    auto stem = [&](const std::string& name) { return utf8FromPath(pathFromUtf8(name).stem()); };
+    bool rust = file.extension() == ".rs";
+    if (rust && parts.size() == 2 && parts[0] == "src" && parts[1] == "main.rs") {
+        // The package's own program, named after the package: chosen by name, since a package
+        // with programs in src/bin too has no single default to run.
+        std::string package = cargoPackageName(manifest);
+        if (!package.empty()) {
+            return {"--bin", package};
+        }
+        return {};
+    }
+    if (rust && parts.size() == 3 && parts[0] == "src" && parts[1] == "bin") {
+        return {"--bin", stem(parts[2])};
+    }
+    if (rust && parts.size() == 4 && parts[0] == "src" && parts[1] == "bin" && parts[3] == "main.rs") {
+        return {"--bin", parts[2]};
+    }
+    if (rust && parts.size() == 2 && parts[0] == "examples") {
+        return {"--example", stem(parts[1])};
+    }
+    if (rust && parts.size() == 3 && parts[0] == "examples" && parts[2] == "main.rs") {
+        return {"--example", parts[1]};
+    }
+    return {};
+}
+
+std::string cargoExecutableFor(const std::string& messages, const std::filesystem::path& file) {
+    std::error_code error;
+    std::filesystem::path wanted = std::filesystem::weakly_canonical(file, error);
+    std::vector<std::string> programs;
+    std::istringstream lines(messages);
+    std::string line;
+    while (std::getline(lines, line)) {
+        nlohmann::json message = nlohmann::json::parse(line, nullptr, false);
+        if (!message.is_object() || message.value("reason", "") != "compiler-artifact" || !message.contains("executable") ||
+            !message["executable"].is_string()) {
+            continue;
+        }
+        std::string program = message["executable"].get<std::string>();
+        if (message.contains("target") && message["target"].is_object() && message["target"].contains("src_path") &&
+            message["target"]["src_path"].is_string()) {
+            std::filesystem::path root = std::filesystem::weakly_canonical(pathFromUtf8(message["target"]["src_path"].get<std::string>()), error);
+            if (!wanted.empty() && root == wanted) {
+                return program;
+            }
+        }
+        if (std::find(programs.begin(), programs.end(), program) == programs.end()) {
+            programs.push_back(program);
+        }
+    }
+    return programs.size() == 1 ? programs.front() : std::string();
+}
+
 std::string commandToRunFile(const std::filesystem::path& file, const std::string& languageId, ShellKind shell) {
     std::string path = quoteForShell(utf8FromPath(file), shell);
     // Compiled programs go in the user's own temporary folder, not a shared one, where another
@@ -291,7 +391,8 @@ std::string commandToRunFile(const std::filesystem::path& file, const std::strin
         return "node " + path;
     }
     if (languageId == "typescript" || languageId == "typescriptreact") {
-        return "npx tsx " + path;
+        // tsx when it is installed; otherwise npx fetches it.
+        return (findExecutable("tsx").empty() ? "npx tsx " : "tsx ") + path;
     }
     if (languageId == "swift") {
         return "swift " + path;
@@ -321,6 +422,15 @@ std::string commandToRunFile(const std::filesystem::path& file, const std::strin
         return "go run " + path;
     }
     if (languageId == "rust") {
+        // A file in a Cargo package needs Cargo (its crates and modules); a file alone, just rustc.
+        std::filesystem::path manifest = cargoManifestFor(file);
+        if (!manifest.empty()) {
+            std::string command = "cargo run --manifest-path " + quoteForShell(utf8FromPath(manifest), shell);
+            for (const std::string& argument : cargoTargetArguments(file, manifest)) {
+                command += " " + (argument.rfind("--", 0) == 0 ? argument : quoteForShell(argument, shell));
+            }
+            return command;
+        }
         return compileThenRun("rustc " + path);
     }
     if (languageId == "cpp" && (extension == ".cpp" || extension == ".cc" || extension == ".cxx" || extension == ".mm")) {

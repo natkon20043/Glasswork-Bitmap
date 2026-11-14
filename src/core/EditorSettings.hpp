@@ -62,7 +62,7 @@ struct EditorSettings {
     bool formatOnSave = false;
 
     // ---- Terminal
-    /// 0: one point smaller than the editor's.
+    /// 0: the same as the editor's (fontSize).
     double terminalFontSize = 0;
     /// Empty: $SHELL.
     std::string terminalShell;

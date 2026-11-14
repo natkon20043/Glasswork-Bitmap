@@ -29,8 +29,22 @@ ShellKind defaultShellKind();
 /// Reads CMake, Swift packages, Cargo, Go modules, dotnet, npm scripts and Makefiles. Builds come first.
 std::vector<Task> detectTasks(const std::filesystem::path& folder, ShellKind shell = defaultShellKind());
 
-/// Runs one file alone (a script, or a single C/C++/Rust file compiled first). Empty for files that can't.
+/// Runs one file alone (a script, or a single C/C++/Rust file compiled first; a Rust file inside a
+/// Cargo package runs with `cargo run`). Empty for files that can't.
 std::string commandToRunFile(const std::filesystem::path& file, const std::string& languageId, ShellKind shell = defaultShellKind());
+
+/// The Cargo.toml of the nearest folder above a Rust file that has one; empty when the file is in no
+/// Cargo package.
+std::filesystem::path cargoManifestFor(const std::filesystem::path& file);
+/// The `cargo run` / `cargo build` arguments choosing the program a file is the root of, as separate
+/// words: {"--bin", "name"} for src/bin/name.rs and src/bin/name/main.rs (and src/main.rs, named
+/// after the package), {"--example", "name"} for
+/// examples/name.rs and examples/name/main.rs; none for anything else (Cargo's default program).
+std::vector<std::string> cargoTargetArguments(const std::filesystem::path& file, const std::filesystem::path& manifest);
+/// From `cargo build --message-format=json...` output: the program built from `file` (the target
+/// whose root it is), else the only program built. Empty when there is none, or several and none is
+/// the file's.
+std::string cargoExecutableFor(const std::string& messages, const std::filesystem::path& file);
 
 // ---- Shell
 

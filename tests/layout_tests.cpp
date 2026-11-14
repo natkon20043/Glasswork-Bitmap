@@ -5,6 +5,7 @@
 #include "EditorConfig.hpp"
 #include "Folding.hpp"
 #include "LineStore.hpp"
+#include "Paths.hpp"
 #include "RowMap.hpp"
 #include "SemanticTokens.hpp"
 #include "Tasks.hpp"
@@ -481,6 +482,51 @@ TEST(runningASingleFile) {
     CHECK(compile.find(" /tmp/") == std::string::npos);
     CHECK(gw::commandToRunFile("/p/notes.txt", "plaintext", ShellKind::Posix).empty());
     CHECK_EQ(gw::shellQuote("it's"), std::string("'it'\\''s'"));
+
+    // Rust: a file alone is compiled with rustc; a file in a Cargo package runs with Cargo, as the
+    // program it is the root of.
+    std::string alone = gw::commandToRunFile("/nonexistent-folder/hello.rs", "rust", ShellKind::Posix);
+    CHECK(alone.find("rustc '/nonexistent-folder/hello.rs' -o ") == 0);
+    namespace fs = std::filesystem;
+    fs::path crate = fs::temp_directory_path() / ("gw-cargo-" + std::to_string(gw::currentProcessId()));
+    fs::create_directories(crate / "src" / "bin" / "multi");
+    fs::create_directories(crate / "examples");
+    std::ofstream(crate / "Cargo.toml") << "[package]\nedition = \"2021\"\nname = \"demo\"  # the package\n\n[[bin]]\nname = \"other\"\n";
+    std::string manifest = gw::shellQuote((crate / "Cargo.toml").string());
+    CHECK_EQ(gw::commandToRunFile(crate / "src" / "main.rs", "rust", ShellKind::Posix),
+             "cargo run --manifest-path " + manifest + " --bin 'demo'");
+    CHECK_EQ(gw::commandToRunFile(crate / "src" / "parser.rs", "rust", ShellKind::Posix), "cargo run --manifest-path " + manifest);
+    CHECK_EQ(gw::commandToRunFile(crate / "src" / "bin" / "tool.rs", "rust", ShellKind::Posix),
+             "cargo run --manifest-path " + manifest + " --bin 'tool'");
+    CHECK_EQ(gw::commandToRunFile(crate / "src" / "bin" / "multi" / "main.rs", "rust", ShellKind::Posix),
+             "cargo run --manifest-path " + manifest + " --bin 'multi'");
+    CHECK_EQ(gw::commandToRunFile(crate / "examples" / "demo.rs", "rust", ShellKind::Posix),
+             "cargo run --manifest-path " + manifest + " --example 'demo'");
+    CHECK(gw::cargoManifestFor(crate / "src" / "bin" / "multi" / "main.rs") == crate / "Cargo.toml");
+    CHECK(gw::cargoManifestFor("/nonexistent-folder/hello.rs").empty());
+    CHECK(gw::cargoTargetArguments(crate / "src" / "lib.rs", crate / "Cargo.toml").empty());
+    // A [[bin]] table's name is not the package's.
+    fs::path other = crate / "other";
+    fs::create_directories(other / "src");
+    std::ofstream(other / "Cargo.toml") << "[package]\nname.workspace = true\n[[bin]]\nname = \"tool\"\n";
+    CHECK(gw::cargoTargetArguments(other / "src" / "main.rs", other / "Cargo.toml").empty());
+
+    // Which program Cargo built for a file, from its JSON messages.
+    std::string root = (crate / "src").generic_string();
+    auto artifact = [&](const std::string& source, const std::string& executable) {
+        return "{\"reason\":\"compiler-artifact\",\"target\":{\"kind\":[\"bin\"],\"src_path\":\"" + root + "/" + source +
+               "\"},\"executable\":" + executable + "}\n";
+    };
+    std::string library = "{\"reason\":\"compiler-artifact\",\"target\":{\"kind\":[\"lib\"],\"src_path\":\"" + root +
+                          "/lib.rs\"},\"executable\":null}\n";
+    std::string two = library + artifact("main.rs", "\"/t/demo\"") + artifact("bin/tool.rs", "\"/t/tool\"") +
+                      "{\"reason\":\"build-finished\",\"success\":true}\n";
+    CHECK_EQ(gw::cargoExecutableFor(two, crate / "src" / "bin" / "tool.rs"), std::string("/t/tool"));
+    CHECK_EQ(gw::cargoExecutableFor(two, crate / "src" / "main.rs"), std::string("/t/demo"));
+    CHECK_EQ(gw::cargoExecutableFor(two, crate / "src" / "parser.rs"), std::string());  // several, none of them this file's
+    CHECK_EQ(gw::cargoExecutableFor(library + artifact("main.rs", "\"/t/demo\""), crate / "src" / "parser.rs"), std::string("/t/demo"));
+    CHECK_EQ(gw::cargoExecutableFor("   Compiling demo\nnot json\n", crate / "src" / "main.rs"), std::string());
+    fs::remove_all(crate);
 
     // PowerShell (Windows): no "&&" in Windows PowerShell 5, and '' inside single quotes.
     std::string powershell = gw::commandToRunFile("C:/p/main.c", "c", ShellKind::PowerShell);

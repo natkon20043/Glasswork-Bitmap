@@ -157,6 +157,37 @@ TEST(findsTypeScriptBesideTheServer) {
     std::ofstream(kept / "tsserver.js") << "//";
     CHECK_EQ(gw::lsp::findTypeScriptServer(program, (root / "project").string(), (root / "support").string()), (kept / "tsserver.js").string());
     CHECK_EQ(gw::lsp::findTypeScriptServer(program, (root / "project").string(), ""), std::string());
+#ifndef _WIN32
+    // TypeScript as a package of its own, found through its tsserver program on the PATH: a program
+    // beside the package's folder (Nix: <prefix>/bin/tsserver and <prefix>/lib/node_modules/typescript)...
+    fs::path separate = root / "typescript";
+    fs::create_directories(separate / "bin");
+    fs::create_directories(separate / "lib" / "node_modules" / "typescript" / "lib");
+    std::ofstream(separate / "bin" / "tsserver") << "#!/bin/sh\n";
+    std::ofstream(separate / "lib" / "node_modules" / "typescript" / "lib" / "tsserver.js") << "//";
+    std::string separateProgram = (separate / "bin" / "tsserver").string();
+    CHECK_EQ(gw::lsp::findTypeScriptServer(program, (root / "project").string(), "", separateProgram),
+             (separate / "lib" / "node_modules" / "typescript" / "lib" / "tsserver.js").string());
+    // ...or a link into the package (npm's global folder).
+    fs::path npm = root / "npm-global";
+    fs::create_directories(npm / "bin");
+    fs::create_directories(npm / "lib" / "node_modules" / "typescript" / "bin");
+    fs::create_directories(npm / "lib" / "node_modules" / "typescript" / "lib");
+    std::ofstream(npm / "lib" / "node_modules" / "typescript" / "bin" / "tsserver") << "#!/usr/bin/env node\n";
+    std::ofstream(npm / "lib" / "node_modules" / "typescript" / "lib" / "tsserver.js") << "//";
+    fs::create_symlink("../lib/node_modules/typescript/bin/tsserver", npm / "bin" / "tsserver");
+    CHECK_EQ(gw::lsp::findTypeScriptServer(program, (root / "project").string(), "", (npm / "bin" / "tsserver").string()),
+             (fs::weakly_canonical(root) / "npm-global" / "lib" / "node_modules" / "typescript" / "lib" / "tsserver.js").string());
+    // The copy kept in the support folder still comes first, and a project's own TypeScript before both.
+    CHECK_EQ(gw::lsp::findTypeScriptServer(program, (root / "project").string(), (root / "support").string(), separateProgram),
+             (kept / "tsserver.js").string());
+    fs::create_directories(root / "project" / "node_modules" / "typescript" / "lib");
+    std::ofstream(root / "project" / "node_modules" / "typescript" / "lib" / "tsserver.js") << "//";
+    CHECK_EQ(gw::lsp::findTypeScriptServer(program, (root / "project").string(), "", separateProgram), std::string());
+    // A tsserver program that belongs to no package found.
+    fs::remove_all(root / "project" / "node_modules");
+    CHECK_EQ(gw::lsp::findTypeScriptServer(program, (root / "project").string(), "", (root / "bin" / "tsserver").string()), std::string());
+#endif
     fs::remove_all(root);
 }
 
