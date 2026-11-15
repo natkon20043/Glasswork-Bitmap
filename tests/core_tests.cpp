@@ -485,17 +485,24 @@ TEST(fuzzyScoreAgreesWithFuzzyMatch) {
 TEST(breakpointLinesMoveWithEdits) {
     gw::Document document;
     document.replace({{0, 0}, {0, 0}}, "a\nb\nc\nd\ne");
-    document.breakpointLines = {1, 3};
-    // A line inserted above moves both down.
+    gw::BreakpointSettings conditional;
+    conditional.condition = "i == 3";
+    conditional.enabled = false;
+    document.breakpoints = {{1, {}}, {3, conditional}};
+    // A line inserted above moves both down, each keeping its settings.
     document.replace({{0, 1}, {0, 1}}, "\nnew");
-    CHECK(document.breakpointLines == (std::set<size_t>{2, 4}));
+    CHECK(document.breakpoints.size() == 2);
+    CHECK(document.breakpoints.count(2) == 1 && document.breakpoints.count(4) == 1);
+    CHECK(document.breakpoints.at(4) == conditional);
+    CHECK(document.breakpoints.at(2) == gw::BreakpointSettings());
     // Removing a line between them moves the later one up and keeps the earlier.
     document.replace({{2, 1}, {3, 1}}, "");   // "b\nc" -> "b" (line 3 merged into line 2)
-    CHECK(document.breakpointLines.count(2) == 1);
-    CHECK(document.breakpointLines.count(3) == 1);
+    CHECK(document.breakpoints.count(2) == 1);
+    CHECK(document.breakpoints.count(3) == 1);
+    CHECK(document.breakpoints.at(3) == conditional);
     // Deleting the line a breakpoint is on drops it.
     document.replace({{2, 1}, {3, 1}}, "");
-    CHECK(document.breakpointLines.count(3) == 0);
+    CHECK(document.breakpoints.count(3) == 0);
 }
 
 // MARK: Multiple cursors

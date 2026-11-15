@@ -35,6 +35,29 @@ namespace {
 constexpr size_t kHighlightBudget = 400;
 constexpr double kBlinkPeriod = 0.55;
 
+// ---- Breakpoint markers: 7 by 7 pictures, each row's lowest 7 bits, leftmost first.
+using MarkerArt = uint8_t[7];
+constexpr MarkerArt kDotArt = {0b0011100, 0b0111110, 0b1111111, 0b1111111, 0b1111111, 0b0111110, 0b0011100};
+constexpr MarkerArt kRingArt = {0b0011100, 0b0100010, 0b1000001, 0b1000001, 0b1000001, 0b0100010, 0b0011100};
+constexpr MarkerArt kDiamondArt = {0b0001000, 0b0011100, 0b0111110, 0b1111111, 0b0111110, 0b0011100, 0b0001000};
+constexpr MarkerArt kHollowDiamondArt = {0b0001000, 0b0010100, 0b0100010, 0b1000001, 0b0100010, 0b0010100, 0b0001000};
+/// The "=" cut into a conditional breakpoint's dot.
+constexpr MarkerArt kEqualsArt = {0, 0, 0b0011100, 0, 0b0011100, 0, 0};
+constexpr int kMarkerSize = 7;
+
+void drawMarkerArt(ui::Canvas& canvas, const MarkerArt& art, int x, int y, int pixel, Color color, bool shadow) {
+    for (int pass = shadow ? 0 : 1; pass < 2; ++pass) {
+        int shift = pass == 0 ? pixel : 0;
+        for (int row = 0; row < kMarkerSize; ++row) {
+            for (int column = 0; column < kMarkerSize; ++column) {
+                if ((art[row] >> (kMarkerSize - 1 - column)) & 1) {
+                    canvas.fill({x + column * pixel + shift, y + row * pixel + shift, pixel, pixel}, pass == 0 ? ui::kBlackColor : color);
+                }
+            }
+        }
+    }
+}
+
 bool isOpenerByte(char c) { return c == '(' || c == '[' || c == '{'; }
 bool isCloserByte(char c) { return c == ')' || c == ']' || c == '}'; }
 
@@ -136,7 +159,12 @@ int EditorView::textLeft() const { return ui(14); }
 int EditorView::gutterWidth() const {
     size_t count = document_ ? document_->buffer().lineCount() : 1;
     int digits = std::max(3, static_cast<int>(std::log10(static_cast<double>(std::max<size_t>(count, 1)))) + 1);
-    return digits * charWidth_ + ui(40);
+    return breakpointColumnWidth() + digits * charWidth_ + ui(26);
+}
+
+int EditorView::breakpointColumnWidth() const {
+    // Two characters: room for a marker as tall as the text, and an easy place to click.
+    return 2 * charWidth_;
 }
 
 ui::Rect EditorView::textArea() const {
@@ -839,11 +867,30 @@ void EditorView::drawGutter(ui::Canvas& canvas, size_t first, size_t last) {
         int numberWidth = ui::textWidth(font, number);
         Color color = line == caretLine ? activeLineNumberColor_ : lineNumberColor_;
         ui::drawText(canvas, font, right - numberWidth, top, number, color, true);
-        bool hasBreakpoint = document_->breakpointLines.count(line) > 0;
+        auto breakpoint = document_->breakpoints.find(line);
+        bool hasBreakpoint = breakpoint != document_->breakpoints.end();
         bool isExecution = executionLine_ >= 0 && static_cast<size_t>(executionLine_) == line;
+        int markerX = frame_.x + (breakpointColumnWidth() - kMarkerSize * pixel_) / 2;
+        int markerY = top + (lineHeight_ - kMarkerSize * pixel_) / 2;
         if (hasBreakpoint) {
-            int dot = 5 * pixel_;
-            canvas.fillShadowed({frame_.x + 2 * pixel_, top + (lineHeight_ - dot) / 2, dot, dot}, bitmap::kLightRed, pixel_);
+            // Red dot: a breakpoint. With "=": it has a condition or a hit count. A diamond: a
+            // logpoint. Hollow and red: the debugger couldn't place it. Hollow and grey: disabled.
+            const BreakpointSettings& settings = breakpoint->second;
+            bool logpoint = !settings.logMessage.empty();
+            bool unverified = unverifiedBreakpoints_.count(line) > 0;
+            if (!settings.enabled) {
+                drawMarkerArt(canvas, logpoint ? kHollowDiamondArt : kRingArt, markerX, markerY, pixel_, lineNumberColor_, true);
+            } else if (unverified) {
+                drawMarkerArt(canvas, logpoint ? kHollowDiamondArt : kRingArt, markerX, markerY, pixel_, bitmap::kLightRed, true);
+            } else {
+                drawMarkerArt(canvas, logpoint ? kDiamondArt : kDotArt, markerX, markerY, pixel_, bitmap::kLightRed, true);
+                if (!logpoint && (!settings.condition.empty() || !settings.hitCondition.empty())) {
+                    drawMarkerArt(canvas, kEqualsArt, markerX, markerY, pixel_, ui::kBlackColor, false);
+                }
+            }
+        } else if (hoverBreakpointLine_ >= 0 && static_cast<size_t>(hoverBreakpointLine_) == line && !isExecution) {
+            // Where a click would put one.
+            drawMarkerArt(canvas, kDotArt, markerX, markerY, pixel_, ui::withOpacity(bitmap::kLightRed, 0.45), false);
         }
         if (isExecution) {
             // A yellow arrow, over the breakpoint's dot if there is one.
@@ -859,9 +906,11 @@ void EditorView::drawGutter(ui::Canvas& canvas, size_t first, size_t last) {
             }
         }
         int severity = diagnosticSeverityForLine(line);
-        if (!hasBreakpoint && !isExecution && severity > 0 && severity <= 2) {
+        bool hovered = hoverBreakpointLine_ >= 0 && static_cast<size_t>(hoverBreakpointLine_) == line;
+        if (!hasBreakpoint && !isExecution && !hovered && severity > 0 && severity <= 2) {
             int dot = ui(6);
-            canvas.fillShadowed({frame_.x + ui(10), top + (lineHeight_ - dot) / 2, dot, dot}, colorForSeverity(severity), pixel_);
+            canvas.fillShadowed({frame_.x + (breakpointColumnWidth() - dot) / 2, top + (lineHeight_ - dot) / 2, dot, dot},
+                                colorForSeverity(severity), pixel_);
         }
         // Fold arrows: always for folded blocks, for the rest while the pointer is over the numbers.
         bool folded = folds_.isFoldHeader(line);
@@ -1343,9 +1392,16 @@ void EditorView::updateCaret(bool animated) {
     }
     bool wantsSmear = animated && Services::shared().settings().vimMode && Services::shared().settings().vimCursorSmear &&
                       hasLastCaretRect_ && !(lastCaretRect_ == target);
-    if (wantsSmear && block &&
-        isRealMove({double(lastCaretRect_.x), double(lastCaretRect_.y), double(lastCaretRect_.w), double(lastCaretRect_.h)},
-                   {double(target.x), double(target.y), double(target.w), double(target.h)}, charWidth_, lineHeight_)) {
+    // A held key (moves closer together than a deliberate press) steps the cursor along at once:
+    // a smear on every repeat leaves the cursor trailing behind where it really is.
+    double moveTime = now();
+    bool held = animated && moveTime - lastAnimatedMove_ < SpringSmear::kHeldKeyGap;
+    if (animated) {
+        lastAnimatedMove_ = moveTime;
+    }
+    SmearRect from{double(lastCaretRect_.x), double(lastCaretRect_.y), double(lastCaretRect_.w), double(lastCaretRect_.h)};
+    SmearRect to{double(target.x), double(target.y), double(target.w), double(target.h)};
+    if (wantsSmear && block && !held && isSmearJump(from, to, charWidth_, lineHeight_)) {
         smear_.setCharWidth(charWidth_);
         if (!smear_.active()) {
             smear_.jump({double(lastCaretRect_.x), double(lastCaretRect_.y), double(lastCaretRect_.w), double(lastCaretRect_.h)});
@@ -1356,8 +1412,8 @@ void EditorView::updateCaret(bool animated) {
             smearing_ = true;
             lastSmearFrame_ = time;
         }
-    } else if (!animated || !wantsSmear) {
-        stopSmear();
+    } else {
+        stopSmear();  // the cursor is simply at its new place, whatever a smear was doing
     }
     lastCaretRect_ = target;
     hasLastCaretRect_ = true;
@@ -1445,6 +1501,26 @@ double EditorView::nextFrameTime() const {
     double elapsed = now() - blinkStart_;
     double next = std::floor(elapsed / kBlinkPeriod + 1) * kBlinkPeriod;
     return blinkStart_ + next;
+}
+
+ui::Rect EditorView::caretPaintBounds() {
+    if (!document_ || !focused_) {
+        return {};
+    }
+    ui::Rect area = textArea();
+    int originX = area.x - static_cast<int>(std::lround(scrollX_));
+    int originY = frame_.y - static_cast<int>(std::lround(scrollY_));
+    ui::Rect bounds = caretLayerRect().offset(originX, originY);
+    if (smearing_) {
+        SmearShape shape = smear_.shape();
+        for (const SmearPoint& corner : shape.outline) {
+            int x = static_cast<int>(std::floor(corner.x)) + originX, y = static_cast<int>(std::floor(corner.y)) + originY;
+            bounds = bounds.unite({x, y, 2, 2});
+        }
+    }
+    // The hard shadow, and a pixel either way for rounding.
+    bounds = {bounds.x - 1, bounds.y - 1, bounds.w + pixel_ + 2, bounds.h + pixel_ + 2};
+    return bounds.intersect(area);
 }
 
 bool EditorView::tick(double time) {
@@ -1774,14 +1850,36 @@ void EditorView::toggleBreakpointAtLine(size_t line) {
     if (!document_ || line >= document_->buffer().lineCount()) {
         return;
     }
-    if (document_->breakpointLines.count(line) > 0) {
-        document_->breakpointLines.erase(line);
+    if (document_->breakpoints.count(line) > 0) {
+        document_->breakpoints.erase(line);
     } else {
-        document_->breakpointLines.insert(line);
+        document_->breakpoints[line] = BreakpointSettings();
     }
     needsDisplay();
     if (onBreakpointsChange) {
         onBreakpointsChange();
+    }
+}
+
+void EditorView::setBreakpoint(size_t line, std::optional<BreakpointSettings> settings) {
+    if (!document_ || line >= document_->buffer().lineCount()) {
+        return;
+    }
+    if (settings) {
+        document_->breakpoints[line] = *settings;
+    } else {
+        document_->breakpoints.erase(line);
+    }
+    needsDisplay();
+    if (onBreakpointsChange) {
+        onBreakpointsChange();
+    }
+}
+
+void EditorView::setUnverifiedBreakpoints(std::set<size_t> lines) {
+    if (lines != unverifiedBreakpoints_) {
+        unverifiedBreakpoints_ = std::move(lines);
+        needsDisplay();
     }
 }
 
@@ -1811,8 +1909,9 @@ void EditorView::cancelHover() {
 void EditorView::mouseExited() {
     hoverWord_ = Range{{SIZE_MAX, 0}, {SIZE_MAX, 0}};
     cancelHover();
-    if (gutterHover_) {
+    if (gutterHover_ || hoverBreakpointLine_ >= 0) {
         gutterHover_ = false;
+        hoverBreakpointLine_ = -1;
         needsDisplay();
     }
 }
@@ -1824,6 +1923,17 @@ void EditorView::mouseMoved(const MouseEvent& event) {
     bool overGutter = event.x >= frame_.x && event.x < frame_.x + gutterWidth() && frame_.contains(event.x, event.y);
     if (overGutter != gutterHover_) {
         gutterHover_ = overGutter;
+        needsDisplay();
+    }
+    long breakpointLine = -1;
+    if (overGutter && event.x - frame_.x < breakpointColumnWidth()) {
+        size_t line = lineAtY(documentPoint(event.x, event.y).second, nullptr);
+        if (line < document_->buffer().lineCount()) {
+            breakpointLine = static_cast<long>(line);
+        }
+    }
+    if (breakpointLine != hoverBreakpointLine_) {
+        hoverBreakpointLine_ = breakpointLine;
         needsDisplay();
     }
     if (!onHoverRequest) {
@@ -1989,6 +2099,13 @@ bool EditorView::mouseDown(const MouseEvent& event) {
     int gutter = gutterWidth();
     bool inGutter = event.x < frame_.x + gutter;
     auto [x, y] = documentPoint(event.x, event.y);
+    if (event.button == 3 && inGutter && event.x - frame_.x < breakpointColumnWidth() && onBreakpointMenu) {
+        size_t line = lineAtY(y, nullptr);
+        if (line < document_->buffer().lineCount()) {
+            onBreakpointMenu(line, event.x, event.y);
+            return true;
+        }
+    }
     if (event.button == 3) {
         Position position = positionForPoint(std::max(x, 0.0), y);
         Range selection = document_->selection.range();
@@ -2009,8 +2126,8 @@ bool EditorView::mouseDown(const MouseEvent& event) {
         int local = event.x - frame_.x;
         size_t line = lineAtY(y, nullptr);
         bool inRange = line < document_->buffer().lineCount();
-        // The far left of the line numbers: a breakpoint.
-        if (local < ui(15) && inRange) {
+        // The column left of the line numbers: a breakpoint.
+        if (local < breakpointColumnWidth() && inRange) {
             toggleBreakpointAtLine(line);
             return true;
         }

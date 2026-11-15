@@ -282,7 +282,8 @@ void DebugPanel::draw(ui::Canvas& canvas, bool focused) {
         ui::drawText(canvas, Chrome(), frame_.x, y, start, colors.text, true);
         hits_.push_back({{frame_.x, y, width, line}, 5, 0});
         y += line + line / 2;
-        for (const std::string& piece : ui::wrapText("Click left of the line numbers (or press F9) to set breakpoints. "
+        for (const std::string& piece : ui::wrapText("Click left of the line numbers (or press F9) to set breakpoints; "
+                                                      "right-click one for a condition, a hit count or a log message. "
                                                       "F5 builds and runs the current file (or the program you chose) "
                                                       "under the debugger.",
                                                       static_cast<size_t>(cells))) {
@@ -304,13 +305,23 @@ void DebugPanel::draw(ui::Canvas& canvas, bool focused) {
         }
         y += line + line / 2;
     }
-    // The sections share what is left: the stack a quarter, the variables a third, the console the rest.
+    // The breakpoints get a line each (up to a quarter of the room, then they scroll); the other
+    // sections share what is left: the stack a quarter, the variables a third, the console the rest.
+    // Before a session starts there is no stack and there are no variables: the breakpoints get
+    // their room (up to half of it).
+    shownBreakpoints_ = breakpointRows ? breakpointRows() : std::vector<BreakpointRow>();
+    bool running = state != DebugState::Idle;
     int remaining = frame_.bottom() - y;
-    int stackHeight = std::max(2 * line, remaining / 4 / line * line);
-    int variableHeight = std::max(2 * line, remaining / 3 / line * line);
-    ui::drawText(canvas, Chrome(), frame_.x, y, "CALL STACK", colors.textAccent, true);
-    y += line;
-    stackArea_ = {frame_.x, y, frame_.w, stackHeight - line};
+    int breakpointHeight = std::min(static_cast<int>(std::max<size_t>(shownBreakpoints_.size(), 1) + 1) * line,
+                                    std::max(2 * line, remaining / (running ? 4 : 2) / line * line));
+    remaining -= breakpointHeight;
+    int stackHeight = running ? std::max(2 * line, remaining / 4 / line * line) : 0;
+    int variableHeight = running ? std::max(2 * line, remaining / 3 / line * line) : 0;
+    if (running) {
+        ui::drawText(canvas, Chrome(), frame_.x, y, "CALL STACK", colors.textAccent, true);
+        y += line;
+    }
+    stackArea_ = {frame_.x, y, frame_.w, std::max(0, stackHeight - line)};
     const auto& frames = debugger_.frames();
     for (size_t index = stackScroll_; index < frames.size(); ++index) {
         int top = stackArea_.y + static_cast<int>(index - stackScroll_) * line;
@@ -334,9 +345,11 @@ void DebugPanel::draw(ui::Canvas& canvas, bool focused) {
         hits_.push_back({{frame_.x, top, frame_.w, line}, 2, static_cast<int>(index)});
     }
     y = stackArea_.bottom();
-    ui::drawText(canvas, Chrome(), frame_.x, y, "VARIABLES", colors.textAccent, true);
-    y += line;
-    variableArea_ = {frame_.x, y, frame_.w, variableHeight - line};
+    if (running) {
+        ui::drawText(canvas, Chrome(), frame_.x, y, "VARIABLES", colors.textAccent, true);
+        y += line;
+    }
+    variableArea_ = {frame_.x, y, frame_.w, std::max(0, variableHeight - line)};
     std::vector<VariableRow> variables = visibleVariables();
     for (size_t index = variableScroll_; index < variables.size(); ++index) {
         int top = variableArea_.y + static_cast<int>(index - variableScroll_) * line;
@@ -355,6 +368,46 @@ void DebugPanel::draw(ui::Canvas& canvas, bool focused) {
         hits_.push_back({{frame_.x, top, frame_.w, line}, 3, static_cast<int>(index)});
     }
     y = variableArea_.bottom();
+    ui::drawText(canvas, Chrome(), frame_.x, y, "BREAKPOINTS", colors.textAccent, true);
+    y += line;
+    breakpointArea_ = {frame_.x, y, frame_.w, breakpointHeight - line};
+    if (shownBreakpoints_.empty()) {
+        ui::drawText(canvas, Chrome(), frame_.x + cell / 2, y, fitted("None yet (F9)", cells - 1), colors.textDim, true);
+    }
+    breakpointScroll_ = std::min(breakpointScroll_, shownBreakpoints_.size());
+    for (size_t index = breakpointScroll_; index < shownBreakpoints_.size(); ++index) {
+        int top = breakpointArea_.y + static_cast<int>(index - breakpointScroll_) * line;
+        if (top + line > breakpointArea_.bottom()) {
+            break;
+        }
+        const BreakpointRow& row = shownBreakpoints_[index];
+        // "[x] main.c:12  total += i  if i == 3": its box, where it is, its code and what it does.
+        std::string box = row.settings.enabled ? "[x]" : "[ ]";
+        std::string text = " " + std::filesystem::path(row.path).filename().string() + ":" + std::to_string(row.line + 1);
+        if (!row.settings.logMessage.empty()) {
+            text += "  log " + row.settings.logMessage;
+        } else {
+            if (!row.settings.condition.empty()) {
+                text += "  if " + row.settings.condition;
+            }
+            if (!row.settings.hitCondition.empty()) {
+                text += "  hit " + row.settings.hitCondition;
+            }
+            if (!row.code.empty() && row.settings.condition.empty() && row.settings.hitCondition.empty()) {
+                text += "  " + row.code;
+            }
+        }
+        if (row.unverified) {
+            text += "  (not placed)";
+        }
+        int boxWidth = ui::textWidth(Chrome(), box);
+        Color color = row.settings.enabled && !row.unverified ? colors.text : colors.textDim;
+        ui::drawText(canvas, Chrome(), frame_.x, top, box, row.settings.enabled ? bitmap::kLightRed : colors.textDim, true);
+        ui::drawText(canvas, Chrome(), frame_.x + boxWidth, top, fitted(text, cells - 3), color, true);
+        hits_.push_back({{frame_.x, top, boxWidth, line}, 7, static_cast<int>(index)});
+        hits_.push_back({{frame_.x + boxWidth, top, frame_.w - boxWidth, line}, 6, static_cast<int>(index)});
+    }
+    y = breakpointArea_.bottom();
     ui::drawText(canvas, Chrome(), frame_.x, y, "CONSOLE", colors.textAccent, true);
     y += line;
     ui::Rect inputRect{frame_.x, frame_.bottom() - line, frame_.w, line};
@@ -396,6 +449,22 @@ bool DebugPanel::mouseDown(const MouseEvent& event) {
             continue;
         }
         inputFocused_ = hit.kind == 4;
+        if ((hit.kind == 6 || hit.kind == 7) && static_cast<size_t>(hit.index) < shownBreakpoints_.size()) {
+            BreakpointRow row = shownBreakpoints_[static_cast<size_t>(hit.index)];
+            if (event.button == 3) {
+                if (onBreakpointMenu) {
+                    onBreakpointMenu(row, event.x, event.y);
+                }
+            } else if (hit.kind == 7) {
+                if (onBreakpointToggle) {
+                    onBreakpointToggle(row);
+                }
+            } else if (onBreakpointOpen) {
+                onBreakpointOpen(row);
+            }
+            changed();
+            return true;
+        }
         switch (hit.kind) {
             case 1:
                 switch (hit.index) {
@@ -455,6 +524,9 @@ bool DebugPanel::wheel(const WheelEvent& event) {
     } else if (variableArea_.contains(event.x, event.y)) {
         long maxScroll = std::max(0L, static_cast<long>(visibleVariables().size()) - variableArea_.h / Line());
         variableScroll_ = static_cast<size_t>(std::clamp(static_cast<long>(variableScroll_) + step, 0L, maxScroll));
+    } else if (breakpointArea_.contains(event.x, event.y)) {
+        long maxScroll = std::max(0L, static_cast<long>(shownBreakpoints_.size()) - breakpointArea_.h / Line());
+        breakpointScroll_ = static_cast<size_t>(std::clamp(static_cast<long>(breakpointScroll_) + step, 0L, maxScroll));
     } else if (consoleArea_.contains(event.x, event.y)) {
         consoleScroll_ = static_cast<size_t>(std::clamp(static_cast<long>(consoleScroll_) - step, 0L, static_cast<long>(console_.size())));
     }

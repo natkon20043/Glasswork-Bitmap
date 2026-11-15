@@ -422,19 +422,19 @@ Position Document::apply(Position at, const std::string& removed, const std::str
         extra.caret = positionAfterEdit(extra.caret, at, removedEnd, end);
     }
     followEditInSnippet(at, removedEnd, end);
-    if (!breakpointLines.empty() && (lineDelta != 0 || removedEnd.line != at.line)) {
+    if (!breakpoints.empty() && (lineDelta != 0 || removedEnd.line != at.line)) {
         size_t removedLines = removedEnd.line - at.line;
-        std::set<size_t> moved;
-        for (size_t line : breakpointLines) {
+        Breakpoints moved;
+        for (auto& [line, settings] : breakpoints) {
             if (line <= at.line) {
-                moved.insert(line);  // above the edit, or on the line it starts on
+                moved.emplace(line, std::move(settings));  // above the edit, or on the line it starts on
             } else if (line <= at.line + removedLines) {
-                continue;            // its line was removed (merged into the one above)
+                continue;  // its line was removed (merged into the one above)
             } else {
-                moved.insert(static_cast<size_t>(static_cast<long>(line) + lineDelta));
+                moved.emplace(static_cast<size_t>(static_cast<long>(line) + lineDelta), std::move(settings));
             }
         }
-        breakpointLines = std::move(moved);
+        breakpoints = std::move(moved);
     }
     notify(at.line, lineDelta, end.line);
     return end;

@@ -33,6 +33,7 @@ const std::set<std::string>& commandsSkippingShell() {
         "workbench.action.previousEditor",     "workbench.action.zoomIn",          "workbench.action.zoomOut",
         "workbench.action.zoomReset",          "workbench.view.explorer",          "workbench.view.debug",
         "workbench.action.terminal.fontZoomIn", "workbench.action.terminal.fontZoomOut", "workbench.action.terminal.fontZoomReset",
+        "workbench.action.debug.restart",      "workbench.action.debug.pause",
         "workbench.actions.view.problems",     "workbench.action.tasks.build",     "workbench.action.tasks.runTask",
         "glasswork.runCurrentFile",            "workbench.action.openSettings",    "workbench.action.files.openFolder",
         "workbench.extensions.search",         "workbench.action.files.openFile",  "glasswork.openFolderInNewWindow",
@@ -322,8 +323,30 @@ void MainWindow::registerCommands() {
                [this] { return debugger_.state() == DebugState::Stopped; });
     addCommand("workbench.action.debug.stepOut", "Debug: Step Out", [this] { debugger_.stepOut(); },
                [this] { return debugger_.state() == DebugState::Stopped; });
+    addCommand("workbench.action.debug.restart", "Debug: Restart", [this] { restartDebugging(); });
     addCommand("editor.debug.action.toggleBreakpoint", "Debug: Toggle Breakpoint", [this] { toggleBreakpoint(); }, hasText);
+    addCommand("editor.debug.action.conditionalBreakpoint", "Debug: Add Conditional Breakpoint...",
+               [this] { editBreakpointAtCaret(BreakpointField::Condition); }, hasText);
+    addCommand("glasswork.breakpointHitCount", "Debug: Breakpoint Hit Count...",
+               [this] { editBreakpointAtCaret(BreakpointField::HitCount); }, hasText);
+    addCommand("editor.debug.action.addLogPoint", "Debug: Add Logpoint...",
+               [this] { editBreakpointAtCaret(BreakpointField::LogMessage); }, hasText);
+    addCommand("glasswork.toggleBreakpointEnabled", "Debug: Enable or Disable Breakpoint", [this] {
+        std::string path;
+        size_t line = 0;
+        if (caretLocation(path, line)) {
+            toggleBreakpointEnabled(path, line);
+        }
+    }, hasText);
+    addCommand("workbench.debug.viewlet.action.enableAllBreakpoints", "Debug: Enable All Breakpoints",
+               [this] { setAllBreakpointsEnabled(true); });
+    addCommand("workbench.debug.viewlet.action.disableAllBreakpoints", "Debug: Disable All Breakpoints",
+               [this] { setAllBreakpointsEnabled(false); });
     addCommand("workbench.debug.viewlet.action.removeAllBreakpoints", "Debug: Remove All Breakpoints", [this] { removeAllBreakpoints(); });
+    addCommand("editor.debug.action.goToNextBreakpoint", "Debug: Go to Next Breakpoint", [this] { goToBreakpoint(1); });
+    addCommand("editor.debug.action.goToPreviousBreakpoint", "Debug: Go to Previous Breakpoint", [this] { goToBreakpoint(-1); });
+    addCommand("editor.debug.action.runToCursor", "Debug: Run to Cursor", [this] { runToCursor(); }, hasText);
+    addCommand("editor.debug.action.jumpToCursor", "Debug: Jump to Cursor", [this] { jumpToCursor(); }, hasText);
 }
 
 bool MainWindow::runCommand(const std::string& id, const nlohmann::json& arguments) {
@@ -535,12 +558,21 @@ std::vector<Menu> MainWindow::buildMenus() {
                       item("Run &Task...", "workbench.action.tasks.runTask"), line,
                       item("T&erminal", "workbench.action.terminal.toggleTerminal")}});
     menus.push_back({"&Debug",
-                     {item("&Start / Continue", "workbench.action.debug.start"), item("S&top", "workbench.action.debug.stop"), line,
+                     {item("&Start / Continue", "workbench.action.debug.start"), item("&Pause", "workbench.action.debug.pause"),
+                      item("S&top", "workbench.action.debug.stop"), item("&Restart", "workbench.action.debug.restart"), line,
                       item("Step &Over", "workbench.action.debug.stepOver"), item("Step &Into", "workbench.action.debug.stepInto"),
-                      item("Step O&ut", "workbench.action.debug.stepOut"), line,
+                      item("Step O&ut", "workbench.action.debug.stepOut"), item("Run to &Cursor", "editor.debug.action.runToCursor"),
+                      item("&Jump to Cursor", "editor.debug.action.jumpToCursor"), line,
                       item("Toggle &Breakpoint", "editor.debug.action.toggleBreakpoint"),
-                      item("&Clear Breakpoints", "workbench.debug.viewlet.action.removeAllBreakpoints"), line,
-                      item("Debug &Executable...", "glasswork.debugExecutable")}});
+                      item("Con&ditional Breakpoint...", "editor.debug.action.conditionalBreakpoint"),
+                      item("&Hit Count...", "glasswork.breakpointHitCount"), item("&Logpoint...", "editor.debug.action.addLogPoint"),
+                      item("&Enable / Disable Breakpoint", "glasswork.toggleBreakpointEnabled"),
+                      item("&Next Breakpoint", "editor.debug.action.goToNextBreakpoint"),
+                      item("Previous Brea&kpoint", "editor.debug.action.goToPreviousBreakpoint"),
+                      item("Enable &All Breakpoints", "workbench.debug.viewlet.action.enableAllBreakpoints"),
+                      item("Disable All Breakpoints", "workbench.debug.viewlet.action.disableAllBreakpoints"),
+                      item("Remo&ve All Breakpoints", "workbench.debug.viewlet.action.removeAllBreakpoints"), line,
+                      item("Debug E&xecutable...", "glasswork.debugExecutable")}});
     MenuItem wrap = item("&Word Wrap", "editor.action.toggleWordWrap");
     wrap.checked = [] { return Services::shared().settings().wordWrap; };
     MenuItem side = item("&Side Window", "workbench.action.toggleSidebarVisibility");

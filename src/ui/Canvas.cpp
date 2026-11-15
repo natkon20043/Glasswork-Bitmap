@@ -74,12 +74,18 @@ void Canvas::fillChecker(const Rect& rect, Color first, Color second, int cell) 
         return 0xFF000000u | (((color >> 24) & 0xFF) << 16) | (((color >> 16) & 0xFF) << 8) | ((color >> 8) & 0xFF);
     };
     uint32_t a = packed(first), b = packed(second);
-    for (int row = area.y; row < area.bottom(); ++row) {
-        uint32_t* line = pixels_.data() + static_cast<size_t>(row) * width_;
-        int rowParity = (row / cell) & 1;
+    // There are only two kinds of row (they swap colors every `cell` rows): work each out once and
+    // copy it down, rather than deciding every pixel's color (a whole window of them each frame).
+    std::vector<uint32_t> rows[2];
+    for (int parity = 0; parity < 2; ++parity) {
+        rows[parity].resize(static_cast<size_t>(area.w));
         for (int column = area.x; column < area.right(); ++column) {
-            line[column] = (((column / cell) & 1) ^ rowParity) ? b : a;
+            rows[parity][static_cast<size_t>(column - area.x)] = (((column / cell) & 1) ^ parity) ? b : a;
         }
+    }
+    for (int row = area.y; row < area.bottom(); ++row) {
+        const std::vector<uint32_t>& pattern = rows[(row / cell) & 1];
+        std::copy(pattern.begin(), pattern.end(), pixels_.data() + static_cast<size_t>(row) * width_ + area.x);
     }
 }
 

@@ -57,15 +57,18 @@ public:
     SmearShape shape() const;
 
     // ---- Constants
-    /// Pull per 1/60 s frame, from 0 (none) to 1 (straight there).
-    static constexpr double kHeadStiffness = 0.6;
-    static constexpr double kTailStiffness = 0.45;
+    /// Pull per 1/60 s frame, from 0 (none) to 1 (straight there). smear-cursor.nvim's "faster"
+    /// settings: the cursor gets there in a few frames and the trail follows close behind.
+    static constexpr double kHeadStiffness = 0.8;
+    static constexpr double kTailStiffness = 0.6;
     static constexpr double kTrailingExponent = 3;
-    static constexpr double kDamping = 0.85;
-    static constexpr double kAnticipation = 0.2;
+    /// Almost no momentum kept from frame to frame, so the cursor never wobbles past its place.
+    static constexpr double kDamping = 0.95;
+    /// No pulling back before it goes: the cursor sets off the moment the key is pressed.
+    static constexpr double kAnticipation = 0;
     static constexpr double kBaseFrame = 1.0 / 60;
-    /// In characters.
-    static constexpr double kStopDistance = 0.1;
+    /// In characters: closer than this, the smear ends and the cursor is simply there.
+    static constexpr double kStopDistance = 0.5;
     static constexpr double kMostLength = 25;
     static constexpr double kGlowLength = 1;
     static constexpr double kVolumeReduction = 0.3;
@@ -111,5 +114,9 @@ private:
 constexpr double kStepMinCells = 0.5;
 
 bool isRealMove(const SmearRect& from, const SmearRect& to, double charWidth, double lineHeight);
+
+/// Whether a move is a jump worth a smear: two or more lines up or down, or two or more characters
+/// along the same line. A step to the next line or character (j, k, h, l) just moves the cursor.
+bool isSmearJump(const SmearRect& from, const SmearRect& to, double charWidth, double lineHeight);
 
 }  // namespace gw

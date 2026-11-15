@@ -133,6 +133,8 @@ private:
     static SDL_HitTestResult hitTest(SDL_Window* window, const SDL_Point* area, void* data);
     void layout();
     void draw();
+    /// Sends what changed in the canvas (within `area`) to the screen's texture.
+    void sendToScreen(const ui::Rect& area);
     void drawMenuBar(const Geometry& g);
     void drawEditorWindow(const Geometry& g);
     void drawTabs(int start, int limit, int top);
@@ -144,7 +146,8 @@ private:
     void drawStatusLine(const Geometry& g);
     void drawImageTab(Tab& tab, const ui::Rect& area);
     void drawPreviewTab(Tab& tab, const ui::Rect& area);
-    void drawFrame(const ui::Rect& rect, Color color, bool twoLines);
+    /// `pixel`: the frame's pixel size; 0 for the menus' (chromePixel).
+    void drawFrame(const ui::Rect& rect, Color color, bool twoLines, int pixel = 0);
     int drawOnEdge(const std::string& text, int x, int top, Color color, Color background, bool shadow);
     std::string positionLabel() const;
     std::string modeLabel() const;
@@ -307,15 +310,44 @@ private:
     void runCurrentFile();
     void setUpDebugger();
     void startDebugging();
+    /// Stops and starts the same program again (building it again first when it came from a file).
+    void restartDebugging();
     void debugCurrentFile();
+    /// Debugs a Python file, or builds a C, C++ or Rust file (or its Cargo program) and debugs that.
+    void debugFile(const std::string& path, const std::string& languageId);
+    void debugPython(const std::string& path);
     void debugExecutable();
     void launchDebugProgram(const std::string& program, const std::vector<std::string>& arguments);
     void showDebugFrame(const DebugFrame& frame);
     void updateExecutionMarker();
+    /// Tells the code window which of its breakpoints the debugger couldn't place.
+    void updateBreakpointMarks();
+
+    // ---- MainWindowRun.cpp: breakpoints
+    enum class BreakpointField { Condition, HitCount, LogMessage };
+    /// The breakpoints of the current tab changed (the code window toggled one).
     void breakpointsChanged();
+    /// A file's breakpoints, from its tab when it is open.
+    Breakpoints breakpointsFor(const std::string& path);
+    /// Gives a file new breakpoints: its tab, the store, the debugger and the session all get them.
+    void storeBreakpoints(const std::string& path, const Breakpoints& breakpoints);
+    /// The current tab's file and the caret's line; false when it isn't a saved text file.
+    bool caretLocation(std::string& path, size_t& line) const;
     void toggleBreakpoint();
+    /// Asks for a breakpoint's condition, hit count or log message (adding the breakpoint if needed).
+    void editBreakpoint(const std::string& path, size_t line, BreakpointField field);
+    void editBreakpointAtCaret(BreakpointField field);
+    void toggleBreakpointEnabled(const std::string& path, size_t line);
+    void setAllBreakpointsEnabled(bool enabled);
     void removeAllBreakpoints();
-    std::map<std::string, std::set<size_t>> currentBreakpoints();
+    /// To the next (1) or previous (-1) breakpoint, in any file.
+    void goToBreakpoint(int direction);
+    void runToCursor();
+    void jumpToCursor();
+    /// The menu for the breakpoint column beside a line.
+    void breakpointMenu(const std::string& path, size_t line, int x, int y);
+    std::vector<DebugPanel::BreakpointRow> breakpointRows();
+    std::map<std::string, Breakpoints> currentBreakpoints();
     void loadBreakpoints();
     nlohmann::json breakpointsJson();
 
@@ -327,6 +359,12 @@ private:
     ui::Canvas canvas_;
     double pixelDensity_ = 1;
     bool dirty_ = true;
+    // The last whole frame drawn (its size): frames where only the code window changed draw just that.
+    bool fullFrameDrawn_ = false;
+    int fullFrameWidth_ = 0;
+    int fullFrameHeight_ = 0;
+    ui::Rect lastCaretBounds_;  // where the cursor was drawn in the last frame
+    std::vector<uint32_t> shown_;  // the picture the screen's texture holds now
     bool scripted_ = false;
     std::vector<std::string> script_;
     size_t scriptLine_ = 0;
@@ -413,7 +451,9 @@ private:
     bool navigating_ = false;
 
     // Debugging.
-    std::map<std::string, std::set<size_t>> breakpointStore_;
+    std::map<std::string, Breakpoints> breakpointStore_;
+    /// Starts the last debugging session again (Restart).
+    std::function<void()> relaunch_;
     std::string executionPath_;
     long executionLine_ = -1;
 

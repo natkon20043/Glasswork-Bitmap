@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <map>
 #include <optional>
 #include <set>
 #include <string>
@@ -21,6 +22,23 @@ struct Selection {
     Position anchor;
     Position caret;
 };
+
+/// What a breakpoint does besides stopping there (its line is the key it is kept under).
+struct BreakpointSettings {
+    /// A disabled breakpoint stays in place but the debugger doesn't stop at it.
+    bool enabled = true;
+    /// Stops only when this expression is true.
+    std::string condition;
+    /// Stops only once it has been reached this many times ("5", ">= 3", "% 2"), as the debugger reads it.
+    std::string hitCondition;
+    /// A logpoint: prints this ({expressions} filled in) and carries on, instead of stopping.
+    std::string logMessage;
+
+    bool operator==(const BreakpointSettings&) const = default;
+};
+
+/// Zero-based line -> its breakpoint.
+using Breakpoints = std::map<size_t, BreakpointSettings>;
 
 /// Lines from `firstLine` on were touched; `lineDelta` lines were added (negative: removed).
 struct Change {
@@ -113,8 +131,8 @@ public:
     Selection selection;
     /// Multi-cursor carets; they follow every edit. Undo and redo clear them.
     std::vector<Selection> extraSelections;
-    /// Zero-based lines with a breakpoint; they move with the text.
-    std::set<size_t> breakpointLines;
+    /// Breakpoints by zero-based line; they move with the text.
+    Breakpoints breakpoints;
     /// Wanted caret column when moving up/down, in view points. Reset by horizontal moves and edits.
     std::optional<double> preferredX;
     /// First changed line and line count after a reload.

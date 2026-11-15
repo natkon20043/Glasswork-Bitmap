@@ -15,6 +15,7 @@
 #include <fstream>
 
 #include <algorithm>
+#include <cstring>
 #include <cmath>
 
 namespace gw::app {
@@ -176,6 +177,11 @@ MainWindow::MainWindow(App& app, const std::string& folder, const std::vector<st
         return used;
     };
     editor_.onBreakpointsChange = [this] { breakpointsChanged(); };
+    editor_.onBreakpointMenu = [this](size_t line, int x, int y) {
+        if (Tab* tab = currentTab(); tab && tab->kind == Tab::Kind::Text && !tab->path().empty()) {
+            breakpointMenu(tab->path(), line, x, y);
+        }
+    };
     editor_.onChangeMarkerClick = [this](size_t line, ui::Rect bar) { changeBarClicked(line, bar); };
     editor_.onVimStatusChange = [this] {
         if (!editor_.insertsText()) {
@@ -207,6 +213,10 @@ MainWindow::MainWindow(App& app, const std::string& folder, const std::vector<st
             item("&Format Document", "editor.action.formatDocument"),
             MenuItem::separator(),
             item("Toggle &Breakpoint", "editor.debug.action.toggleBreakpoint"),
+            item("Conditional Brea&kpoint...", "editor.debug.action.conditionalBreakpoint"),
+            item("Run to Cursor", "editor.debug.action.runToCursor"),
+            item("&Jump to Cursor", "editor.debug.action.jumpToCursor"),
+            MenuItem::separator(),
             item("Toggle Co&mment", "editor.action.commentLine"),
         };
         pushOverlay(std::make_unique<MenuOverlay>(menu, x, y, menuHost()));
@@ -258,6 +268,14 @@ MainWindow::MainWindow(App& app, const std::string& folder, const std::vector<st
     debugPanel_->onNeedsDisplay = [this] { dirty_ = true; };
     debugPanel_->onFocus = [this] { setFocus(Focus::Panel); };
     debugPanel_->onStart = [this] { startDebugging(); };
+    debugPanel_->breakpointRows = [this] { return breakpointRows(); };
+    debugPanel_->onBreakpointOpen = [this](const DebugPanel::BreakpointRow& row) {
+        rememberLocation();
+        openPath(row.path, static_cast<long>(row.line) + 1);
+        setFocus(Focus::Editor);
+    };
+    debugPanel_->onBreakpointToggle = [this](const DebugPanel::BreakpointRow& row) { toggleBreakpointEnabled(row.path, row.line); };
+    debugPanel_->onBreakpointMenu = [this](const DebugPanel::BreakpointRow& row, int x, int y) { breakpointMenu(row.path, row.line, x, y); };
 
     suggestions_.onAccept = [this](std::shared_ptr<Suggestion> suggestion) { acceptSuggestion(suggestion, ""); };
     suggestions_.onSelectionChanged = [this](std::shared_ptr<Suggestion> suggestion) {
@@ -493,6 +511,9 @@ void MainWindow::createWindow() {
     useDarkTitleBar(window_);
     SDL_SetWindowHitTest(window_, &MainWindow::hitTest, this);
     renderer_ = SDL_CreateRenderer(window_, nullptr);
+    if (renderer_ && !environmentValue("GLASSWORK_FRAME_TRACE").empty()) {
+        SDL_Log("renderer: %s", SDL_GetRendererName(renderer_));
+    }
     if (renderer_) {
         SDL_SetRenderVSync(renderer_, 1);
     }
@@ -521,6 +542,7 @@ void MainWindow::updateScale() {
         }
         if (renderer_) {
             texture_ = SDL_CreateTexture(renderer_, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, width, height);
+            shown_.clear();  // a new texture holds nothing yet: the next frame is sent whole
             if (texture_) {
                 SDL_SetTextureScaleMode(texture_, SDL_SCALEMODE_NEAREST);
             }
@@ -563,8 +585,10 @@ MainWindow::Geometry MainWindow::geometry() const {
     if (terminalVisible_) {
         int terminal = Snap(std::min<double>(terminalHeight_, std::max(0, bottom - top - kEditorMinimumLines * line)));
         g.terminalWindow = {2 * pixel, bottom - terminal, std::max(0, right - 2 * pixel), terminal};
-        g.terminalContent = {g.terminalWindow.x + cell, g.terminalWindow.y + line, std::max(0, g.terminalWindow.w - 2 * cell),
-                             std::max(0, terminal - 2 * line)};
+        // The terminal's frame and title are sized by its own text (terminal.fontSize), not the menus'.
+        int terminalCell = 6 * terminal_.chromePixel(), terminalLine = 12 * terminal_.chromePixel();
+        g.terminalContent = {g.terminalWindow.x + terminalCell, g.terminalWindow.y + terminalLine,
+                             std::max(0, g.terminalWindow.w - 2 * terminalCell), std::max(0, terminal - 2 * terminalLine)};
         bottom = g.terminalWindow.y - shadow - 2 * pixel;
     }
     g.editorWindow = {2 * pixel, top, std::max(0, right - 2 * pixel), std::max(0, bottom - top)};
@@ -627,7 +651,7 @@ bool MainWindow::onTerminalEdge(const Geometry& g, int x, int y) const {
     if (!terminalVisible_ || x < g.terminalWindow.x || x >= g.terminalWindow.right()) {
         return false;
     }
-    return y >= g.editorWindow.bottom() && y < g.terminalWindow.y + Line();
+    return y >= g.editorWindow.bottom() && y < g.terminalWindow.y + 12 * terminal_.chromePixel();
 }
 
 bool MainWindow::onPanelEdge(const Geometry& g, int x, int y) const {
@@ -657,15 +681,15 @@ void MainWindow::layout() {
 // ---------------------------------------------------------------------------
 // Drawing
 
-void MainWindow::drawFrame(const ui::Rect& rect, Color color, bool twoLines) {
-    int pixel = Pixel(), line = Line(), cell = Cell();
+void MainWindow::drawFrame(const ui::Rect& rect, Color color, bool twoLines, int framePixel) {
+    int pixel = framePixel > 0 ? framePixel : Pixel(), line = 12 * pixel, cell = 6 * pixel;
     auto ring = [&](int inLeft, int inTop, int inRight, int inBottom) {
         int left = rect.x + inLeft, right = rect.right() - inRight - pixel;
         int top = rect.y + inTop, bottom = rect.bottom() - inBottom - pixel;
-        canvas_.fillShadowed({left, top, right - left + pixel, pixel}, color, Pixel());
-        canvas_.fillShadowed({left, bottom, right - left + pixel, pixel}, color, Pixel());
-        canvas_.fillShadowed({left, top, pixel, bottom - top + pixel}, color, Pixel());
-        canvas_.fillShadowed({right, top, pixel, bottom - top + pixel}, color, Pixel());
+        canvas_.fillShadowed({left, top, right - left + pixel, pixel}, color, pixel);
+        canvas_.fillShadowed({left, bottom, right - left + pixel, pixel}, color, pixel);
+        canvas_.fillShadowed({left, top, pixel, bottom - top + pixel}, color, pixel);
+        canvas_.fillShadowed({right, top, pixel, bottom - top + pixel}, color, pixel);
     };
     if (twoLines) {
         ring(2 * pixel, line / 2 - pixel, 2 * pixel, line / 2 - pixel);
@@ -775,7 +799,9 @@ std::vector<ui::Rect> MainWindow::windowButtonRects() const {
     }
     int height = std::max(14 * Pixel(), Line());
     int width = 4 * Cell();
-    int right = canvas_.width();
+    // A character's gap at the right, so the close box (red under the pointer) stops short of the
+    // screen's edge.
+    int right = canvas_.width() - Cell();
     return {{right - 3 * width, 0, width, height}, {right - 2 * width, 0, width, height}, {right - width, 0, width, height}};
 }
 
@@ -1025,8 +1051,13 @@ void MainWindow::drawTerminalWindow(const Geometry& g) {
     const ui::Rect& window = g.terminalWindow;
     canvas_.fill(window.offset(Shadow(), Shadow()), ui::kBlackColor);
     canvas_.fill(window, colors.window);
-    drawFrame(window, colors.frameDim, false);
-    drawOnEdge(" Terminal ", window.x + Cell(), window.y, colors.text, colors.window, true);
+    // Its frame and title in the terminal's own pixels, like its tabs (TerminalPanel::chromePixel).
+    int pixel = terminal_.chromePixel(), cell = 6 * pixel, line = 12 * pixel;
+    drawFrame(window, colors.frameDim, false, pixel);
+    ui::Font& font = *ui::pixelFont(pixel);
+    std::string title = " Terminal ";
+    canvas_.fill({window.x + cell, window.y, ui::textWidth(font, title), line}, colors.window);
+    ui::drawText(canvas_, font, window.x + cell, window.y, title, colors.text, true);
 }
 
 void MainWindow::drawStatusLine(const Geometry& g) {
@@ -1193,16 +1224,52 @@ void MainWindow::drawPreviewTab(Tab& tab, const ui::Rect& area) {
 
 double MainWindow::present() {
     double current = now();
+    // Whether anything but the code window's own animation (the cursor's smear and blink) asked
+    // for this frame.
+    bool othersChanged = dirty_;
     if (editor_.tick(current)) {
         dirty_ = true;
     }
     if (dirty_ && texture_ && renderer_) {
         dirty_ = false;
-        draw();
-        SDL_UpdateTexture(texture_, nullptr, canvas_.data(), canvas_.width() * 4);
+        // GLASSWORK_FRAME_TRACE=1 prints how long each frame takes to draw and to show.
+        static const bool trace = !environmentValue("GLASSWORK_FRAME_TRACE").empty();
+        double started = trace ? now() : 0;
+        // When only the code window moved, only it is drawn again and sent to the screen: the rest of
+        // the picture from the last whole frame is still right. A smear runs at the display's rate this
+        // way, where a whole window, drawn and sent every frame, could not keep up.
+        Tab* tab = currentTab();
+        ui::Rect area = editor_.frame().intersect(canvas_.bounds());
+        bool alone = !othersChanged && fullFrameDrawn_ && canvas_.width() == fullFrameWidth_ && canvas_.height() == fullFrameHeight_ &&
+                     tab && tab->kind == Tab::Kind::Text && overlays_.empty() && !suggestions_.visible() && !hover_.visible() &&
+                     !changeBox_.visible() && !findBar_->visible() && !area.empty();
+        if (alone) {
+            // Just where the cursor was in the last frame and where it is now.
+            ui::Rect caret = editor_.caretPaintBounds();
+            ui::Rect changed = lastCaretBounds_.unite(caret).intersect(area);
+            lastCaretBounds_ = caret;
+            if (!changed.empty()) {
+                canvas_.pushClip(changed);
+                editor_.draw(canvas_, focus_ == Focus::Editor && overlays_.empty() && hasKeyboardFocus());
+                canvas_.popClip();
+                sendToScreen(changed);
+            }
+        } else {
+            draw();
+            fullFrameDrawn_ = true;
+            fullFrameWidth_ = canvas_.width();
+            fullFrameHeight_ = canvas_.height();
+            lastCaretBounds_ = editor_.caretPaintBounds();
+            sendToScreen(canvas_.bounds());
+        }
+        double drawn = trace ? now() : 0;
         SDL_RenderClear(renderer_);
         SDL_RenderTexture(renderer_, texture_, nullptr, nullptr);
         SDL_RenderPresent(renderer_);
+        if (trace) {
+            SDL_Log("frame (%s): draw and send %.1f ms, show %.1f ms", alone ? "code window" : "whole", (drawn - started) * 1000,
+                    (now() - drawn) * 1000);
+        }
     }
     double next = -1;
     double editorFrame = editor_.nextFrameTime();
@@ -1221,6 +1288,63 @@ double MainWindow::present() {
         }
     }
     return next;
+}
+
+void MainWindow::sendToScreen(const ui::Rect& within) {
+    // Only the rows that differ from what the screen already shows are sent, each run of them
+    // trimmed to the columns that changed: a keypress usually changes a few lines' worth of pixels,
+    // and sending a whole window of them takes longer than drawing it.
+    int width = canvas_.width(), height = canvas_.height();
+    const uint32_t* pixels = canvas_.data();
+    size_t count = static_cast<size_t>(width) * static_cast<size_t>(height);
+    if (shown_.size() != count) {
+        shown_.assign(pixels, pixels + count);
+        SDL_UpdateTexture(texture_, nullptr, pixels, width * 4);
+        return;
+    }
+    ui::Rect area = within.intersect(canvas_.bounds());
+    auto sendRun = [&](int top, int bottom) {
+        int left = area.right(), right = area.x;
+        for (int row = top; row < bottom; ++row) {
+            const uint32_t* now = pixels + static_cast<size_t>(row) * width;
+            const uint32_t* before = shown_.data() + static_cast<size_t>(row) * width;
+            int first = area.x;
+            while (first < area.right() && now[first] == before[first]) {
+                ++first;
+            }
+            int last = area.right() - 1;
+            while (last >= first && now[last] == before[last]) {
+                --last;
+            }
+            if (first <= last) {
+                left = std::min(left, first);
+                right = std::max(right, last + 1);
+            }
+        }
+        if (left >= right) {
+            return;
+        }
+        SDL_Rect rect{left, top, right - left, bottom - top};
+        SDL_UpdateTexture(texture_, &rect, pixels + static_cast<size_t>(top) * width + left, width * 4);
+        for (int row = top; row < bottom; ++row) {
+            size_t start = static_cast<size_t>(row) * width + left;
+            std::copy(pixels + start, pixels + start + (right - left), shown_.data() + start);
+        }
+    };
+    int runStart = -1;
+    for (int row = area.y; row < area.bottom(); ++row) {
+        size_t start = static_cast<size_t>(row) * width + area.x;
+        bool differs = std::memcmp(pixels + start, shown_.data() + start, static_cast<size_t>(area.w) * 4) != 0;
+        if (differs && runStart < 0) {
+            runStart = row;
+        } else if (!differs && runStart >= 0) {
+            sendRun(runStart, row);
+            runStart = -1;
+        }
+    }
+    if (runStart >= 0) {
+        sendRun(runStart, area.bottom());
+    }
 }
 
 // ---------------------------------------------------------------------------

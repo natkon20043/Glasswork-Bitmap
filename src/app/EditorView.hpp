@@ -20,6 +20,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -92,6 +93,8 @@ public:
     int lineHeight() const { return lineHeight_; }
     int charWidth() const { return charWidth_; }
     int gutterWidth() const;
+    /// The column at the gutter's left where breakpoints sit (a click there sets one).
+    int breakpointColumnWidth() const;
 
     // ---- Scrolling (the window's frame draws the scrollbars)
     double scrollX() const { return scrollX_; }
@@ -108,6 +111,9 @@ public:
     double nextFrameTime() const;
     /// Advances animations; true if something changed and it should be drawn again.
     bool tick(double now);
+    /// Where the cursor (or its smear) is drawn, shadow and all, in window pixels; empty when it is
+    /// not drawn. A frame that only moves or blinks the cursor need draw nothing else.
+    ui::Rect caretPaintBounds();
 
     // ---- Events
     bool mouseDown(const MouseEvent& event);
@@ -154,6 +160,10 @@ public:
 
     // ---- Debugging
     void toggleBreakpointAtLine(size_t line);
+    /// Puts a breakpoint with these settings on a line, or (nullopt) takes it away.
+    void setBreakpoint(size_t line, std::optional<BreakpointSettings> settings);
+    /// Lines whose breakpoints the debugger couldn't place: drawn hollow while debugging.
+    void setUnverifiedBreakpoints(std::set<size_t> lines);
     void setExecutionLine(long line);
 
     // ---- Editing commands
@@ -212,6 +222,8 @@ public:
     /// "up", "down", "pageup", "pagedown", "enter", "tab", "escape": true if the completion list used it.
     std::function<bool(const std::string& action)> onCompletionKey;
     std::function<void()> onBreakpointsChange;
+    /// Right-click in the breakpoint column beside `line`, at (x, y) in window coordinates.
+    std::function<void(size_t line, int x, int y)> onBreakpointMenu;
     /// A change bar was clicked; `bar` is in window coordinates.
     std::function<void(size_t line, ui::Rect bar)> onChangeMarkerClick;
     std::function<void()> onVimStatusChange;
@@ -408,6 +420,7 @@ private:
     SpringSmear smear_;
     bool smearing_ = false;
     double lastSmearFrame_ = 0;
+    double lastAnimatedMove_ = -1;  // when the cursor last moved by a key or click (held keys repeat fast)
 
     // Mouse.
     enum class Drag { None, Text, Gutter, Column };
@@ -417,6 +430,8 @@ private:
     double columnStartX_ = 0;
     double columnStartY_ = 0;
     bool gutterHover_ = false;
+    long hoverBreakpointLine_ = -1;  // the line the pointer is beside in the breakpoint column
+    std::set<size_t> unverifiedBreakpoints_;
     Range hoverWord_{{SIZE_MAX, 0}, {SIZE_MAX, 0}};
     bool hoverActive_ = false;
     uint64_t hoverTimer_ = 0;

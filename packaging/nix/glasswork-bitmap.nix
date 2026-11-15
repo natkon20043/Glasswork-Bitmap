@@ -1,5 +1,5 @@
 # Glasswork Bitmap for Nix and NixOS, with the language servers, compilers and debugger it uses for
-# C, C++, Rust, Python, JavaScript and TypeScript.
+# C, C++, Rust, Python, JavaScript and TypeScript (debugpy too, for debugging Python).
 #
 #   nix-build                          (from the repository folder; the program is in result/bin)
 #   packaging/linux/install.sh         (on NixOS: builds this and installs it for your user)
@@ -40,6 +40,9 @@
 let
   # CMake normally downloads these two; Nix builds have no network, so it is handed the very same
   # versions from nixpkgs instead (JSON 3.12.0, Oniguruma 6.9.10).
+  # Python with debugpy, so F5 can stop at breakpoints in Python files.
+  pythonWithDebugger = python3.withPackages (packages: [ packages.debugpy ]);
+
   onigurumaSource = runCommand "oniguruma-source-${oniguruma.version}" { } ''
     mkdir -p $out
     tar -xf ${oniguruma.src} --strip-components=1 -C $out
@@ -51,7 +54,7 @@ let
     gcc
     gdb
     # Python
-    python3
+    pythonWithDebugger
     pyright
     # JavaScript and TypeScript (node also runs VS Code extensions)
     nodejs
@@ -67,7 +70,8 @@ let
   ];
 
   # Last on the PATH, so your own tools come first; RUST_SRC_PATH (the standard library's source, for
-  # rust-analyzer) only when you haven't set one.
+  # rust-analyzer) only when you haven't set one; and the Python that has debugpy, which the editor
+  # runs Python's debugger with even when your own python3 comes first on the PATH.
   wrapperArguments = lib.optionals withLanguageTools [
     "--suffix"
     "PATH"
@@ -76,6 +80,9 @@ let
     "--set-default"
     "RUST_SRC_PATH"
     "${rustPlatform.rustLibSrc}"
+    "--set-default"
+    "GLASSWORK_DEBUGPY_PYTHON"
+    "${pythonWithDebugger}/bin/python3"
   ];
 in
 stdenv.mkDerivation {

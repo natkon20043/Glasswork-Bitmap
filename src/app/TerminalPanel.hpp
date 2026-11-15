@@ -75,6 +75,9 @@ public:
     const ui::Rect& frame() const { return frame_; }
     void draw(ui::Canvas& canvas, bool focused);
     void reloadAppearance();
+    /// One pixel of the terminal's own chrome (its title, tabs and buttons): the size of a pixel of
+    /// its text, so they grow and shrink with the terminal's text rather than the menus'.
+    int chromePixel() const;
 
     // ---- Events
     bool mouseDown(const MouseEvent& event);
@@ -108,6 +111,11 @@ private:
         long row = 0;
         int column = 0;
     };
+    // The chrome's measures, from chromePixel().
+    int Pixel() const { return chromePixel(); }
+    int Cell() const { return 6 * chromePixel(); }
+    int Line() const { return 12 * chromePixel(); }
+    ui::Font& Chrome() const;
     TerminalSession* current() const;
     void select(size_t index);
     ui::Rect stripRect() const;

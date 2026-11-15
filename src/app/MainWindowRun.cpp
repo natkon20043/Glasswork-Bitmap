@@ -157,7 +157,6 @@ void MainWindow::runCurrentFile() {
     }
     runTaskCommand(command);
 }
-
 // ---------------------------------------------------------------------------
 // Debugging
 
@@ -185,6 +184,24 @@ void MainWindow::setUpDebugger() {
         debugPanel_->appendConsole("Debugging ended (exit code " + std::to_string(code) + ").\n", "console");
         dirty_ = true;
     };
+    debugger_.onBreakpointStatus = [this] {
+        updateBreakpointMarks();
+        debugPanel_->reload();
+        dirty_ = true;
+    };
+    debugger_.onBreakpointMoved = [this](const std::string& path, size_t from, size_t to) {
+        // Shown where the program will really stop, as the debugger placed it. Two that land on
+        // the same line become one.
+        Breakpoints breakpoints = breakpointsFor(path);
+        auto found = breakpoints.find(from);
+        if (found == breakpoints.end()) {
+            return;
+        }
+        BreakpointSettings settings = found->second;
+        breakpoints.erase(found);
+        breakpoints.emplace(to, settings);
+        storeBreakpoints(path, breakpoints);
+    };
 }
 
 void MainWindow::updateExecutionMarker() {
@@ -192,7 +209,23 @@ void MainWindow::updateExecutionMarker() {
     bool here = tab && tab->kind == Tab::Kind::Text && !tab->path().empty() && executionLine_ >= 0 && !executionPath_.empty() &&
                 tabForPath(executionPath_) == tab;
     editor_.setExecutionLine(here ? executionLine_ : -1);
+    updateBreakpointMarks();
     dirty_ = true;
+}
+
+void MainWindow::updateBreakpointMarks() {
+    // While debugging, the breakpoints the debugger couldn't place are drawn hollow.
+    std::set<size_t> unverified;
+    Tab* tab = currentTab();
+    if (tab && tab->kind == Tab::Kind::Text && !tab->path().empty() && debugger_.state() != DebugState::Idle) {
+        for (const auto& [line, settings] : tab->document->breakpoints) {
+            std::optional<BreakpointStatus> status = debugger_.breakpointStatus(tab->path(), line);
+            if (settings.enabled && status && !status->verified) {
+                unverified.insert(line);
+            }
+        }
+    }
+    editor_.setUnverifiedBreakpoints(std::move(unverified));
 }
 
 void MainWindow::showDebugFrame(const DebugFrame& frame) {
@@ -237,14 +270,17 @@ void MainWindow::startDebugging() {
         std::string extension = utf8FromPath(pathFromUtf8(tab->path()).extension());
         const std::string& language = tab->document->languageId;
         if ((language == "c" && extension == ".c") || (language == "cpp" && (extension == ".cpp" || extension == ".cc" || extension == ".cxx")) ||
-            (language == "rust" && extension == ".rs")) {
-            debugCurrentFile();
+            (language == "rust" && extension == ".rs") || language == "python") {
+            debugFile(tab->path(), language);
             return;
         }
-        // Scripts (Python, JavaScript, TypeScript...) have no debugger here: F5 runs them in the
+        // JavaScript, TypeScript and other scripts have no debugger here: F5 runs them in the
         // terminal, as Run > Run File does, rather than asking for a program to debug.
         ShellKind kind = shellKindOf(Services::shared().settings().terminalShell);
         if (!commandToRunFile(pathFromUtf8(tab->path()), language, kind).empty()) {
+            if (!tab->document->breakpoints.empty()) {
+                setStatusMessage("No debugger for " + language + " files here: running it (breakpoints only stop C, C++, Rust and Python)", 8);
+            }
             runCurrentFile();
             return;
         }
@@ -252,19 +288,44 @@ void MainWindow::startDebugging() {
     debugExecutable();
 }
 
+void MainWindow::restartDebugging() {
+    // The same program again (built again first when it was built from a file), from the start.
+    if (debugger_.state() != DebugState::Idle) {
+        debugger_.stop();
+    }
+    if (relaunch_) {
+        std::function<void()> again = relaunch_;
+        again();
+    } else {
+        startDebugging();
+    }
+}
+
 void MainWindow::debugCurrentFile() {
     Tab* tab = currentTab();
-    std::string extension = tab && !tab->path().empty() ? utf8FromPath(pathFromUtf8(tab->path()).extension()) : std::string();
-    bool isC = tab && tab->document && tab->document->languageId == "c" && extension == ".c";
-    bool isCpp = tab && tab->document && tab->document->languageId == "cpp" && (extension == ".cpp" || extension == ".cc" || extension == ".cxx");
-    bool isRust = tab && tab->document && tab->document->languageId == "rust" && extension == ".rs";
-    if (!isC && !isCpp && !isRust) {
-        showError("Can't debug this file", "Glasswork Bitmap can build a single C, C++ or Rust file, or the Cargo program a Rust file "
-                                           "belongs to, for debugging. For other projects, build them first and use Debug > Debug "
-                                           "Executable.");
+    if (!tab || tab->kind != Tab::Kind::Text || tab->path().empty()) {
+        showError("Nothing to debug", "Save the file first.");
         return;
     }
-    std::string source = tab->path();
+    debugFile(tab->path(), tab->document->languageId);
+}
+
+void MainWindow::debugFile(const std::string& path, const std::string& languageId) {
+    if (languageId == "python") {
+        debugPython(path);
+        return;
+    }
+    std::string extension = utf8FromPath(pathFromUtf8(path).extension());
+    bool isC = languageId == "c" && extension == ".c";
+    bool isCpp = languageId == "cpp" && (extension == ".cpp" || extension == ".cc" || extension == ".cxx");
+    bool isRust = languageId == "rust" && extension == ".rs";
+    if (!isC && !isCpp && !isRust) {
+        showError("Can't debug this file", "Glasswork Bitmap can debug Python files, and build a single C, C++ or Rust file (or the "
+                                           "Cargo program a Rust file belongs to) for debugging. For other projects, build them first "
+                                           "and use Debug > Debug Executable.");
+        return;
+    }
+    std::string source = path;
     std::error_code error;
     fs::path output = fs::temp_directory_path(error) / ("glasswork-debug-" + std::to_string(currentProcessId()));
 #ifdef _WIN32
@@ -312,9 +373,11 @@ void MainWindow::debugCurrentFile() {
     debugPanel_->appendConsole("Building " + utf8FromPath(pathFromUtf8(source).filename()) + "...\n", "console");
     std::weak_ptr<bool> alive = alive_;
     std::string built = utf8FromPath(output);
-    runInBackground([this, alive, command, built, cargo, source] {
+    // Restart builds it again, from the file as it is then.
+    std::function<void()> again = [this, source, languageId = std::string(languageId)] { debugFile(source, languageId); };
+    runInBackground([this, alive, command, built, cargo, source, again] {
         auto result = std::make_shared<ProcessResult>(runProcess(command));
-        runOnMain([this, alive, result, built, cargo, source] {
+        runOnMain([this, alive, result, built, cargo, source, again] {
             if (alive.expired()) {
                 return;
             }
@@ -334,6 +397,73 @@ void MainWindow::debugCurrentFile() {
                 return;
             }
             launchDebugProgram(program, {});
+            relaunch_ = again;
+        });
+    });
+}
+
+void MainWindow::debugPython(const std::string& path) {
+    // The program runs in the project's own virtual environment when it has one (its packages),
+    // else under python3 from the PATH.
+    std::string interpreter;
+    if (!folder_.empty()) {
+        for (const char* environment : {".venv", "venv", "env"}) {
+#ifdef _WIN32
+            fs::path candidate = pathFromUtf8(folder_) / environment / "Scripts" / "python.exe";
+#else
+            fs::path candidate = pathFromUtf8(folder_) / environment / "bin" / "python";
+#endif
+            std::error_code error;
+            if (fs::exists(candidate, error)) {
+                interpreter = utf8FromPath(candidate);
+                break;
+            }
+        }
+    }
+    if (interpreter.empty()) {
+        interpreter = findExecutable(pythonProgram());
+    }
+    if (interpreter.empty()) {
+        showError("Python wasn't found", "Install Python 3 and make sure python3 is on the PATH.");
+        return;
+    }
+    // debugpy's adapter needs a Python that has debugpy: the one the editor was installed with
+    // (GLASSWORK_DEBUGPY_PYTHON), the program's own, or python3 from the PATH.
+    std::vector<std::string> candidates;
+    for (const std::string& candidate : {environmentValue("GLASSWORK_DEBUGPY_PYTHON"), interpreter, findExecutable(pythonProgram())}) {
+        if (!candidate.empty() && std::find(candidates.begin(), candidates.end(), candidate) == candidates.end()) {
+            candidates.push_back(candidate);
+        }
+    }
+    std::string directory = folder_.empty() ? utf8FromPath(pathFromUtf8(path).parent_path()) : folder_;
+    std::weak_ptr<bool> alive = alive_;
+    setStatusMessage("Starting the Python debugger...", 3);
+    runInBackground([this, alive, path, interpreter, candidates, directory] {
+        std::string adapter;
+        for (const std::string& candidate : candidates) {
+            if (runProcess({candidate, "-c", "import debugpy"}).succeeded()) {
+                adapter = candidate;
+                break;
+            }
+        }
+        runOnMain([this, alive, path, interpreter, adapter, directory] {
+            if (alive.expired() || debugger_.state() != DebugState::Idle) {
+                return;
+            }
+            if (adapter.empty()) {
+                // Without debugpy it can still run, just not stop anywhere.
+                setStatusMessage("Running without the debugger: Python debugging needs debugpy (pip install debugpy)", 10);
+                Tab* tab = currentTab();
+                if (tab && tab->path() == path) {
+                    runCurrentFile();
+                }
+                return;
+            }
+            saveAllQuietly();
+            openSidePanel(SidePanel::Debug);
+            debugPanel_->clearConsole();
+            debugger_.startPython(path, {}, directory, interpreter, adapter, currentBreakpoints());
+            relaunch_ = [this, path] { debugPython(path); };
         });
     });
 }
@@ -375,21 +505,50 @@ void MainWindow::launchDebugProgram(const std::string& program, const std::vecto
     openSidePanel(SidePanel::Debug);
     std::string directory = folder_.empty() ? utf8FromPath(pathFromUtf8(program).parent_path()) : folder_;
     debugger_.startProgram(program, arguments, directory, currentBreakpoints());
+    relaunch_ = [this, program, arguments] {
+        debugPanel_->clearConsole();
+        launchDebugProgram(program, arguments);
+    };
 }
 
-std::map<std::string, std::set<size_t>> MainWindow::currentBreakpoints() {
+// ---------------------------------------------------------------------------
+// Breakpoints
+
+std::map<std::string, Breakpoints> MainWindow::currentBreakpoints() {
     for (auto& tab : tabs_) {
         if (tab->kind == Tab::Kind::Text && !tab->path().empty()) {
-            breakpointStore_[tab->path()] = tab->document->breakpointLines;
+            if (tab->document->breakpoints.empty()) {
+                breakpointStore_.erase(tab->path());
+            } else {
+                breakpointStore_[tab->path()] = tab->document->breakpoints;
+            }
         }
     }
-    std::map<std::string, std::set<size_t>> result;
-    for (const auto& [path, lines] : breakpointStore_) {
-        if (!lines.empty()) {
-            result[path] = lines;
-        }
+    return breakpointStore_;
+}
+
+Breakpoints MainWindow::breakpointsFor(const std::string& path) {
+    if (Tab* tab = tabForPath(path); tab && tab->kind == Tab::Kind::Text && tab->document) {
+        return tab->document->breakpoints;
     }
-    return result;
+    auto found = breakpointStore_.find(path);
+    return found != breakpointStore_.end() ? found->second : Breakpoints();
+}
+
+void MainWindow::storeBreakpoints(const std::string& path, const Breakpoints& breakpoints) {
+    if (Tab* tab = tabForPath(path); tab && tab->kind == Tab::Kind::Text && tab->document) {
+        tab->document->breakpoints = breakpoints;
+    }
+    if (breakpoints.empty()) {
+        breakpointStore_.erase(path);
+    } else {
+        breakpointStore_[path] = breakpoints;
+    }
+    debugger_.setBreakpoints(path, breakpoints);
+    updateBreakpointMarks();
+    debugPanel_->reload();
+    saveSession();
+    dirty_ = true;
 }
 
 void MainWindow::breakpointsChanged() {
@@ -397,14 +556,17 @@ void MainWindow::breakpointsChanged() {
     if (!tab || tab->kind != Tab::Kind::Text || tab->path().empty()) {
         return;
     }
-    std::string path = tab->path();
-    breakpointStore_[path] = tab->document->breakpointLines;
-    if (breakpointStore_[path].empty()) {
-        breakpointStore_.erase(path);
+    storeBreakpoints(tab->path(), tab->document->breakpoints);
+}
+
+bool MainWindow::caretLocation(std::string& path, size_t& line) const {
+    Tab* tab = currentTab();
+    if (!tab || tab->kind != Tab::Kind::Text || tab->path().empty()) {
+        return false;
     }
-    debugger_.setBreakpointLines(tab->document->breakpointLines, path);
-    saveSession();
-    dirty_ = true;
+    path = tab->path();
+    line = tab->document->selection.caret.line;
+    return true;
 }
 
 void MainWindow::toggleBreakpoint() {
@@ -416,18 +578,227 @@ void MainWindow::toggleBreakpoint() {
     editor_.toggleBreakpointAtLine(tab->document->selection.caret.line);
 }
 
+void MainWindow::editBreakpoint(const std::string& path, size_t line, BreakpointField field) {
+    Breakpoints breakpoints = breakpointsFor(path);
+    auto found = breakpoints.find(line);
+    BreakpointSettings settings = found != breakpoints.end() ? found->second : BreakpointSettings();
+    DialogOverlay::Options options;
+    std::string where = utf8FromPath(pathFromUtf8(path).filename()) + ":" + std::to_string(line + 1);
+    std::string* value = nullptr;
+    switch (field) {
+        case BreakpointField::Condition:
+            options.title = "Breakpoint Condition";
+            options.lines = {"Stop at " + where + " only when this is true, such as i == 3. Leave it empty to stop every time."};
+            options.placeholder = "i == 3";
+            value = &settings.condition;
+            break;
+        case BreakpointField::HitCount:
+            options.title = "Breakpoint Hit Count";
+            options.lines = {"Stop at " + where + " only once it has been reached this many times, such as 5. Leave it empty to "
+                             "stop every time."};
+            options.placeholder = "5";
+            value = &settings.hitCondition;
+            break;
+        case BreakpointField::LogMessage:
+            options.title = "Logpoint";
+            options.lines = {"At " + where + ", print this in the debugger's console and carry on instead of stopping. Put "
+                             "expressions in braces: total is {total}. Leave it empty to stop there instead."};
+            options.placeholder = "total is {total}";
+            value = &settings.logMessage;
+            break;
+    }
+    options.hasField = true;
+    options.fieldText = *value;
+    options.buttons = {"&OK", "Cancel"};
+    pushOverlay(std::make_unique<DialogOverlay>(options, [this, path, line, field, settings](int button, const std::string& text) mutable {
+        if (button != 0) {
+            return;
+        }
+        std::string trimmed = text;
+        trimmed.erase(0, trimmed.find_first_not_of(" \t"));
+        trimmed.erase(trimmed.find_last_not_of(" \t") + 1);
+        switch (field) {
+            case BreakpointField::Condition: settings.condition = trimmed; break;
+            case BreakpointField::HitCount: settings.hitCondition = trimmed; break;
+            case BreakpointField::LogMessage: settings.logMessage = trimmed; break;
+        }
+        settings.enabled = true;
+        Breakpoints breakpoints = breakpointsFor(path);
+        breakpoints[line] = settings;
+        storeBreakpoints(path, breakpoints);
+    }));
+}
+
+void MainWindow::editBreakpointAtCaret(BreakpointField field) {
+    std::string path;
+    size_t line = 0;
+    if (!caretLocation(path, line)) {
+        beep();
+        return;
+    }
+    editBreakpoint(path, line, field);
+}
+
+void MainWindow::toggleBreakpointEnabled(const std::string& path, size_t line) {
+    Breakpoints breakpoints = breakpointsFor(path);
+    auto found = breakpoints.find(line);
+    if (found == breakpoints.end()) {
+        setStatusMessage("There's no breakpoint on line " + std::to_string(line + 1), 3);
+        return;
+    }
+    found->second.enabled = !found->second.enabled;
+    setStatusMessage(found->second.enabled ? "Breakpoint enabled" : "Breakpoint disabled", 2);
+    storeBreakpoints(path, breakpoints);
+}
+
+void MainWindow::setAllBreakpointsEnabled(bool enabled) {
+    for (auto [path, breakpoints] : currentBreakpoints()) {
+        for (auto& [line, settings] : breakpoints) {
+            settings.enabled = enabled;
+        }
+        storeBreakpoints(path, breakpoints);
+    }
+}
+
 void MainWindow::removeAllBreakpoints() {
-    for (auto& tab : tabs_) {
-        if (tab->kind == Tab::Kind::Text) {
-            tab->document->breakpointLines.clear();
+    for (const auto& [path, breakpoints] : currentBreakpoints()) {
+        storeBreakpoints(path, {});
+    }
+}
+
+void MainWindow::goToBreakpoint(int direction) {
+    // Every breakpoint in every file, in order; the next after the caret (or the one before), going
+    // round from the last to the first.
+    std::vector<std::pair<std::string, size_t>> all;
+    for (const auto& [path, breakpoints] : currentBreakpoints()) {
+        for (const auto& [line, settings] : breakpoints) {
+            all.emplace_back(path, line);
         }
     }
-    for (const auto& [path, lines] : breakpointStore_) {
-        debugger_.setBreakpointLines({}, path);
+    if (all.empty()) {
+        setStatusMessage("There are no breakpoints", 3);
+        return;
     }
-    breakpointStore_.clear();
-    saveSession();
-    dirty_ = true;
+    std::string path;
+    size_t line = 0;
+    std::pair<std::string, size_t> here = caretLocation(path, line) ? std::make_pair(path, line) : all.front();
+    std::pair<std::string, size_t> target;
+    if (direction > 0) {
+        auto next = std::upper_bound(all.begin(), all.end(), here);
+        target = next != all.end() ? *next : all.front();
+    } else {
+        auto next = std::lower_bound(all.begin(), all.end(), here);
+        target = next != all.begin() ? *std::prev(next) : all.back();
+    }
+    rememberLocation();
+    openPath(target.first, static_cast<long>(target.second) + 1);
+}
+
+void MainWindow::runToCursor() {
+    std::string path;
+    size_t line = 0;
+    if (!caretLocation(path, line)) {
+        beep();
+        return;
+    }
+    if (debugger_.state() != DebugState::Stopped) {
+        setStatusMessage(debugger_.state() == DebugState::Idle ? "Run to Cursor works while debugging: start with F5"
+                                                               : "Pause the program first (F6)",
+                         4);
+        return;
+    }
+    debugger_.runToLine(path, line);
+}
+
+void MainWindow::jumpToCursor() {
+    std::string path;
+    size_t line = 0;
+    if (!caretLocation(path, line)) {
+        beep();
+        return;
+    }
+    if (debugger_.state() != DebugState::Stopped) {
+        setStatusMessage(debugger_.state() == DebugState::Idle ? "Jump to Cursor works while debugging: start with F5"
+                                                               : "Pause the program first (F6)",
+                         4);
+        return;
+    }
+    if (!debugger_.canJump()) {
+        setStatusMessage(debugger_.adapterName() + " can't jump to another line", 4);
+        return;
+    }
+    debugger_.jumpToLine(path, line);
+}
+
+void MainWindow::breakpointMenu(const std::string& path, size_t line, int x, int y) {
+    Breakpoints breakpoints = breakpointsFor(path);
+    auto found = breakpoints.find(line);
+    bool has = found != breakpoints.end();
+    Menu menu;
+    auto action = [](const std::string& title, std::function<void()> run, std::function<bool()> enabled = nullptr) {
+        MenuItem item;
+        item.title = title;
+        item.run = std::move(run);
+        item.enabled = std::move(enabled);
+        return item;
+    };
+    auto toggle = [this, path, line] {
+        Breakpoints changed = breakpointsFor(path);
+        if (changed.erase(line) == 0) {
+            changed[line] = BreakpointSettings();
+        }
+        storeBreakpoints(path, changed);
+    };
+    if (has) {
+        const BreakpointSettings& settings = found->second;
+        menu.items.push_back(action("&Remove Breakpoint", toggle));
+        menu.items.push_back(action(settings.condition.empty() ? "Add &Condition..." : "Edit &Condition...",
+                                    [this, path, line] { editBreakpoint(path, line, BreakpointField::Condition); }));
+        menu.items.push_back(action(settings.hitCondition.empty() ? "Add &Hit Count..." : "Edit &Hit Count...",
+                                    [this, path, line] { editBreakpoint(path, line, BreakpointField::HitCount); }));
+        menu.items.push_back(action(settings.logMessage.empty() ? "Make a &Logpoint..." : "Edit &Log Message...",
+                                    [this, path, line] { editBreakpoint(path, line, BreakpointField::LogMessage); }));
+        menu.items.push_back(action(settings.enabled ? "&Disable Breakpoint" : "&Enable Breakpoint",
+                                    [this, path, line] { toggleBreakpointEnabled(path, line); }));
+    } else {
+        menu.items.push_back(action("Add &Breakpoint", toggle));
+        menu.items.push_back(action("Add &Conditional Breakpoint...",
+                                    [this, path, line] { editBreakpoint(path, line, BreakpointField::Condition); }));
+        menu.items.push_back(action("Add &Logpoint...", [this, path, line] { editBreakpoint(path, line, BreakpointField::LogMessage); }));
+    }
+    menu.items.push_back(MenuItem::separator());
+    auto stopped = [this] { return debugger_.state() == DebugState::Stopped; };
+    menu.items.push_back(action("R&un to Here", [this, path, line] { debugger_.runToLine(path, line); }, stopped));
+    menu.items.push_back(action("&Jump to Here", [this, path, line] {
+        if (debugger_.canJump()) {
+            debugger_.jumpToLine(path, line);
+        } else {
+            setStatusMessage(debugger_.adapterName() + " can't jump to another line", 4);
+        }
+    }, stopped));
+    pushOverlay(std::make_unique<MenuOverlay>(menu, x, y, menuHost()));
+}
+
+std::vector<DebugPanel::BreakpointRow> MainWindow::breakpointRows() {
+    std::vector<DebugPanel::BreakpointRow> rows;
+    for (const auto& [path, breakpoints] : currentBreakpoints()) {
+        Tab* tab = tabForPath(path);
+        for (const auto& [line, settings] : breakpoints) {
+            DebugPanel::BreakpointRow row;
+            row.path = path;
+            row.line = line;
+            row.settings = settings;
+            std::optional<BreakpointStatus> status = debugger_.breakpointStatus(path, line);
+            row.unverified = debugger_.state() != DebugState::Idle && settings.enabled && status && !status->verified;
+            if (tab && tab->kind == Tab::Kind::Text && tab->document && line < tab->document->buffer().lineCount()) {
+                std::string_view text = tab->document->buffer().line(line);
+                size_t start = text.find_first_not_of(" \t");
+                row.code = start == std::string_view::npos ? std::string() : std::string(text.substr(start));
+            }
+            rows.push_back(std::move(row));
+        }
+    }
+    return rows;
 }
 
 void MainWindow::loadBreakpoints() {
@@ -437,18 +808,40 @@ void MainWindow::loadBreakpoints() {
         return;
     }
     for (const nlohmann::json& entry : state["breakpoints"]) {
-        std::string path = entry.value("path", "");
-        if (!path.empty() && entry.contains("line") && entry["line"].is_number_unsigned()) {
-            breakpointStore_[path].insert(entry["line"].get<size_t>());
+        if (!entry.is_object()) {
+            continue;
         }
+        std::string path = entry.value("path", "");
+        if (path.empty() || !entry.contains("line") || !entry["line"].is_number_unsigned()) {
+            continue;
+        }
+        BreakpointSettings settings;
+        settings.enabled = entry.value("enabled", true);
+        settings.condition = entry.value("condition", "");
+        settings.hitCondition = entry.value("hitCondition", "");
+        settings.logMessage = entry.value("logMessage", "");
+        breakpointStore_[path][entry["line"].get<size_t>()] = settings;
     }
 }
 
 nlohmann::json MainWindow::breakpointsJson() {
     nlohmann::json entries = nlohmann::json::array();
-    for (const auto& [path, lines] : currentBreakpoints()) {
-        for (size_t line : lines) {
-            entries.push_back({{"path", path}, {"line", line}});
+    for (const auto& [path, breakpoints] : currentBreakpoints()) {
+        for (const auto& [line, settings] : breakpoints) {
+            nlohmann::json entry = {{"path", path}, {"line", line}};
+            if (!settings.enabled) {
+                entry["enabled"] = false;
+            }
+            if (!settings.condition.empty()) {
+                entry["condition"] = settings.condition;
+            }
+            if (!settings.hitCondition.empty()) {
+                entry["hitCondition"] = settings.hitCondition;
+            }
+            if (!settings.logMessage.empty()) {
+                entry["logMessage"] = settings.logMessage;
+            }
+            entries.push_back(entry);
         }
     }
     return entries;

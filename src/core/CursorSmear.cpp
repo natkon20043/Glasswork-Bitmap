@@ -97,6 +97,16 @@ bool isRealMove(const SmearRect& from, const SmearRect& to, double charWidth, do
     return std::max(cellsAcross, cellsDown) >= kStepMinCells - 1e-9;
 }
 
+bool isSmearJump(const SmearRect& from, const SmearRect& to, double charWidth, double lineHeight) {
+    double cellsAcross = std::fabs(to.x - from.x) / charWidth;
+    double cellsDown = std::fabs(to.y - from.y) / lineHeight;
+    if (cellsDown >= 2 - kStepMinCells) {
+        return true;
+    }
+    bool sameLine = cellsDown < kStepMinCells;
+    return sameLine && cellsAcross >= 2 - kStepMinCells;
+}
+
 void SpringSmear::jump(const SmearRect& place) {
     target_ = place;
     guide_ = place;

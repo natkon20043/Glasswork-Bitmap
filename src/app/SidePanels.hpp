@@ -78,6 +78,25 @@ public:
     std::function<void()> onNeedsDisplay;
     std::function<void()> onFocus;
 
+    /// A breakpoint as the panel lists it.
+    struct BreakpointRow {
+        std::string path;
+        size_t line = 0;  // zero-based
+        BreakpointSettings settings;
+        /// The debugger couldn't place it.
+        bool unverified = false;
+        /// The line's code, when its file is open.
+        std::string code;
+    };
+    /// Every breakpoint, in file and line order.
+    std::function<std::vector<BreakpointRow>()> breakpointRows;
+    /// A breakpoint's row was clicked: show its line.
+    std::function<void(const BreakpointRow& row)> onBreakpointOpen;
+    /// Its box was clicked: enable or disable it.
+    std::function<void(const BreakpointRow& row)> onBreakpointToggle;
+    /// Right-click on its row, at (x, y) in window coordinates.
+    std::function<void(const BreakpointRow& row, int x, int y)> onBreakpointMenu;
+
 private:
     struct VariableRow {
         std::shared_ptr<DebugVariable> variable;
@@ -101,14 +120,17 @@ private:
     size_t stackScroll_ = 0;
     size_t variableScroll_ = 0;
     size_t consoleScroll_ = 0;  // lines up from the bottom
+    size_t breakpointScroll_ = 0;
+    std::vector<BreakpointRow> shownBreakpoints_;  // as last drawn, for clicks
     struct Hit {
         ui::Rect rect;
-        int kind;  // 1 button, 2 frame, 3 variable, 4 input, 5 start
+        int kind;  // 1 button, 2 frame, 3 variable, 4 input, 5 start, 6 breakpoint, 7 breakpoint's box
         int index;
     };
     std::vector<Hit> hits_;
     ui::Rect stackArea_;
     ui::Rect variableArea_;
+    ui::Rect breakpointArea_;
     ui::Rect consoleArea_;
 };
 

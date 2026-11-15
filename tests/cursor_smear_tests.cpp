@@ -103,6 +103,22 @@ TEST(aCharactersStepIsAlwaysARealMoveEvenWhenRoundingMakesItAPixelShort) {
     }
 }
 
+TEST(onlyJumpsSmearNotStepsToTheNextLineOrCharacter) {
+    auto jump = [](double across, double down) {
+        return gw::isSmearJump(kBlock, movedBy(kBlock, across * kCharWidth, down * kLineHeight), kCharWidth, kLineHeight);
+    };
+    CHECK(!jump(1, 0));   // l
+    CHECK(!jump(-1, 0));  // h
+    CHECK(!jump(0, 1));   // j
+    CHECK(!jump(0, -1));  // k
+    CHECK(!jump(-30, 1)); // j onto a shorter line is still one line
+    CHECK(jump(2, 0));    // a short word
+    CHECK(jump(-12, 0));  // b, 0, ^ across a line
+    CHECK(jump(0, 2));
+    CHECK(jump(5, -40));  // gg, a search, a click far away
+    CHECK(!jump(0.04, 0.04));
+}
+
 // ---- A move on its own
 
 TEST(atRestTheCursorIsJustTheBlock) {
@@ -119,8 +135,7 @@ TEST(aMoveGoesQuicklyAndEndsExactlyAtTheTarget) {
     CHECK(smear.active());
     CHECK(!smear.holding());
     double time = runToEnd(smear, 60);
-    CHECK(time > 0.04);
-    CHECK(time < 0.15);
+    CHECK(time < 0.05);  // a character's step is over within a frame or two
     CHECK(!smear.active());
     CHECK(isJustTheBlock(smear.shape(), to));  // the smear has shrunk back into the cursor
 }
@@ -166,9 +181,7 @@ TEST(theLeadingCornersGoFirstSoTheCursorStretchesIntoASmear) {
 TEST(theSmearFadesFromTheTrailThroughTheCursorIntoTheGlowAhead) {
     gw::SpringSmear smear = smearAt(kBlock);
     smear.moveTo(movedBy(kBlock, 10 * kCharWidth, 0), 10.0);
-    for (int frame = 0; frame < 3; ++frame) {
-        smear.advance(1.0 / 60);
-    }
+    smear.advance(1.0 / 60);  // one frame in: the cursor is most of the way there, its trail behind it
     gw::SmearShape shape = smear.shape();
     // It fades left to right, the way the cursor goes, all along the smear.
     CHECK(shape.fadeEnd.x > shape.fadeStart.x);
@@ -208,7 +221,7 @@ TEST(aShortTrailOrGlowIsOnlyALittleFaintSoTheyComeAndGoSmoothly) {
         CHECK(glowEnd <= 1);
         lastGlowEnd = glowEnd;
     }
-    CHECK(lastGlowEnd > 0.9);  // nearly gone by the time the cursor lands
+    CHECK(lastGlowEnd > 0.75);  // mostly gone by the time the cursor lands (within half a character)
 }
 
 TEST(aSlantedSmearStaysARealSmear) {

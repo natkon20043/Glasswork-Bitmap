@@ -151,7 +151,7 @@ Tab& MainWindow::addTab(std::unique_ptr<Tab> tab, bool select) {
             language_->trackDocument(added.document.get());
             auto saved = breakpointStore_.find(added.path());
             if (saved != breakpointStore_.end()) {
-                added.document->breakpointLines = saved->second;
+                added.document->breakpoints = saved->second;
             }
         }
         refreshGit(added);
@@ -276,7 +276,7 @@ void MainWindow::removeTab(long index) {
         if (closedPaths_.size() > 30) {
             closedPaths_.erase(closedPaths_.begin());
         }
-        breakpointStore_[tab.path()] = tab.document->breakpointLines;
+        breakpointStore_[tab.path()] = tab.document->breakpoints;
         if (breakpointStore_[tab.path()].empty()) {
             breakpointStore_.erase(tab.path());
         }

@@ -19,10 +19,28 @@ namespace {
 /// Output fed to the screen per main-thread turn, so a flood can't freeze the window.
 constexpr size_t kSliceBytes = 256 * 1024;
 
-int Pixel() { return Services::shared().chromePixel(); }
-int Cell() { return 6 * Pixel(); }
-int Line() { return 12 * Pixel(); }
-ui::Font& Chrome() { return Services::shared().chromeFont(); }
+/// The tab strip's buttons, drawn as small pixel pictures: a box with a plus (a new terminal), a
+/// cross (close it) or a down arrow (hide the terminal). Each row's lowest 7 bits, leftmost first.
+const uint8_t kButtonArt[3][7] = {
+    {0b1111111, 0b1000001, 0b1001001, 0b1011101, 0b1001001, 0b1000001, 0b1111111},
+    {0b1111111, 0b1000001, 0b1010101, 0b1001001, 0b1010101, 0b1000001, 0b1111111},
+    {0b1111111, 0b1000001, 0b1000001, 0b1011101, 0b1001001, 0b1000001, 0b1111111},
+};
+constexpr int kButtonArtSize = 7;
+
+/// Draws one of kButtonArt with its top left at (x, y), `pixel` screen pixels to each of its pixels:
+/// a solid button on `background` over the hard black shadow everything casts.
+void drawButtonArt(ui::Canvas& canvas, int index, int x, int y, int pixel, Color color, Color background) {
+    int size = kButtonArtSize * pixel;
+    canvas.fillShadowed({x, y, size, size}, background, pixel);
+    for (int row = 0; row < kButtonArtSize; ++row) {
+        for (int column = 0; column < kButtonArtSize; ++column) {
+            if ((kButtonArt[index][row] >> (kButtonArtSize - 1 - column)) & 1) {
+                canvas.fill({x + column * pixel, y + row * pixel, pixel, pixel}, color);
+            }
+        }
+    }
+}
 
 }  // namespace
 
@@ -214,6 +232,21 @@ TerminalPanel::~TerminalPanel() {
     for (auto& session : sessions_) {
         session->terminate();
     }
+}
+
+int TerminalPanel::chromePixel() const {
+    // The pixel font's own pixel; a chosen font's line is about twelve of them.
+    if (!font_) {
+        return Services::shared().chromePixel();
+    }
+    if (font_->isPixelFont()) {
+        return std::max(1, font_->pixel());
+    }
+    return std::max(1, static_cast<int>(std::lround(font_->lineHeight() / 12.0)));
+}
+
+ui::Font& TerminalPanel::Chrome() const {
+    return *ui::pixelFont(chromePixel());
 }
 
 TerminalSession* TerminalPanel::current() const {
@@ -422,13 +455,14 @@ void TerminalPanel::draw(ui::Canvas& canvas, bool focused) {
     // first, so the tabs know how much room they have and never run under them.
     stripButtons_.clear();
     ui::Rect strip = stripRect();
-    const char* labels[3] = {"[+]", "[x]", "[v]"};
     int right = strip.right();
+    int art = kButtonArtSize * pixel;
+    int artTop = strip.y + (strip.h - art) / 2;
     for (int button = 2; button >= 0; --button) {
-        int width = ui::textWidth(Chrome(), labels[button]);
-        right -= width + (button < 2 ? cell / 2 : 0);
-        ui::drawText(canvas, Chrome(), right, strip.y, labels[button], colors.text, true);
-        stripButtons_.push_back({{right, strip.y, width, strip.h}, -(button + 1)});
+        right -= art + (button < 2 ? cell : pixel);
+        drawButtonArt(canvas, button, right, artTop, pixel, colors.text, colors.window);
+        // Clicks count a little around the picture too.
+        stripButtons_.push_back({{right - cell / 2, strip.y, art + cell, strip.h}, -(button + 1)});
     }
     int tabsRight = std::max(strip.x, right - cell);
     // Each tab gets an equal share of the room, at most 24 columns, its title shortened to fit.
@@ -465,7 +499,7 @@ void TerminalPanel::draw(ui::Canvas& canvas, bool focused) {
     ui::Rect area = screenRect();
     canvas.fill(area, background_);
     if (session == nullptr) {
-        ui::drawText(canvas, Chrome(), area.x + cell, area.y + pixel, "No terminal. [+] opens one.", colors.textDim, true);
+        ui::drawText(canvas, Chrome(), area.x + cell, area.y + pixel, "No terminal. The + box opens one.", colors.textDim, true);
         canvas.popClip();
         return;
     }
